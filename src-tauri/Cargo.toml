@@ -31,6 +31,7 @@ zstd = "0.13"
 flate2 = "1"
 tokio = { version = "1", features = ["process", "io-util", "sync", "time", "macros", "rt", "net"] }
 libc = "0.2"
+open = "5"
 
 [dev-dependencies]
 tempfile = "3"

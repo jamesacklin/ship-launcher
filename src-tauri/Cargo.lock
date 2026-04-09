@@ -3371,6 +3371,7 @@ dependencies = [
  "dirs",
  "flate2",
  "libc",
+ "open",
  "serde",
  "serde_json",
  "sha2",
