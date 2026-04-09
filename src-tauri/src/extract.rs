@@ -17,6 +17,9 @@ pub struct InstallMarker {
     pub extracted_at: String,
     pub archive_sha256: String,
     pub format_version: u32,
+    /// Ship name detected from the archive's top-level directory name.
+    #[serde(default)]
+    pub ship_name: Option<String>,
 }
 
 impl InstallMarker {
@@ -32,7 +35,7 @@ impl InstallMarker {
         Ok(())
     }
 
-    fn read(pier_dir: &Path) -> Result<Self, LauncherError> {
+    pub fn read(pier_dir: &Path) -> Result<Self, LauncherError> {
         let contents = fs::read_to_string(Self::path_in(pier_dir))?;
         serde_json::from_str(&contents).map_err(|e| LauncherError::Extraction {
             reason: format!("failed to parse install marker: {e}"),
@@ -234,11 +237,16 @@ pub fn run_extraction(
     // Clean up the now-empty temp dir
     let _ = fs::remove_dir_all(&temp_dir);
 
-    // 7. Write install marker
+    // 7. Write install marker (include ship name from original directory name)
+    let ship_name = pier_root
+        .file_name()
+        .and_then(|n| n.to_str())
+        .map(|s| s.to_string());
     let marker = InstallMarker {
         extracted_at: chrono::Utc::now().to_rfc3339(),
         archive_sha256: manifest.archive_sha256.clone(),
         format_version: manifest.format_version,
+        ship_name,
     };
     marker.write(&paths.pier_dir)?;
 
@@ -442,6 +450,7 @@ mod tests {
             extracted_at: "2026-04-09T00:00:00Z".into(),
             archive_sha256: "abc123".into(),
             format_version: 1,
+            ship_name: Some("sampel-palnet".into()),
         };
         marker.write(&pier_dir).unwrap();
 
@@ -460,6 +469,7 @@ mod tests {
             extracted_at: "2026-04-09T00:00:00Z".into(),
             archive_sha256: "old_hash".into(),
             format_version: 1,
+            ship_name: Some("sampel-palnet".into()),
         };
         marker.write(&pier_dir).unwrap();
 
