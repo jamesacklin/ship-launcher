@@ -22,3 +22,6 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Bundled vere binary (large, downloaded separately)
+src-tauri/resources/bin/vere

@@ -26,6 +26,9 @@ pub enum LauncherError {
     #[error("pier validation error: {reason}")]
     PierValidation { reason: String },
 
+    #[error("version incompatibility: {reason}")]
+    VersionIncompatible { reason: String },
+
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
 }
