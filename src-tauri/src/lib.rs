@@ -1,5 +1,6 @@
 pub mod bundle;
 pub mod errors;
+pub mod extract;
 pub mod manifest;
 pub mod paths;
 
