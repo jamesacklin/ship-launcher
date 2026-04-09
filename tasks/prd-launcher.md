@@ -6,6 +6,8 @@ A Tauri + Rust desktop application that bundles a `vere` binary and an exported 
 
 A separate CLI/build tool (outside the scope of this PRD) assembles the personalized app bundle from an exported pier archive and a `vere` binary. This PRD covers the launcher application itself.
 
+A working exported pier lives at /Users/jamesacklin/Downloads/soltel-novhex.zip
+
 ## Goals
 
 - Demonstrate a complete first-launch flow: extract bundled pier, validate, start `vere`, show status
