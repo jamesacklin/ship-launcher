@@ -79,7 +79,7 @@ impl LauncherState {
             Self::Extracting { .. } => &["Prepared", "Error"],
             Self::Prepared => &["Starting", "Error", "Uninitialized"],
             Self::Starting => &["Running", "Crashed", "Error"],
-            Self::Running { .. } => &["Stopping", "Crashed", "Error"],
+            Self::Running { .. } => &["Stopping", "Stopped", "Crashed", "Error"],
             Self::Stopping => &["Stopped", "Crashed", "Error"],
             Self::Stopped => &["Starting", "Uninitialized"],
             Self::Crashed { .. } => &["Starting", "Uninitialized"],
