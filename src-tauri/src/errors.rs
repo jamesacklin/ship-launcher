@@ -29,6 +29,9 @@ pub enum LauncherError {
     #[error("version incompatibility: {reason}")]
     VersionIncompatible { reason: String },
 
+    #[error("invalid state transition from {from} to {to}")]
+    InvalidTransition { from: String, to: String },
+
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
 }
