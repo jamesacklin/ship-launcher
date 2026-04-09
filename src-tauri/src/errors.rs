@@ -29,6 +29,9 @@ pub enum LauncherError {
     #[error("version incompatibility: {reason}")]
     VersionIncompatible { reason: String },
 
+    #[error("runtime error: {reason}")]
+    Runtime { reason: String },
+
     #[error("invalid state transition from {from} to {to}")]
     InvalidTransition { from: String, to: String },
 
