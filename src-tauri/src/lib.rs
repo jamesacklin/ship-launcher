@@ -6,7 +6,6 @@ pub mod extract;
 pub mod health;
 pub mod lock;
 pub mod logs;
-pub mod manifest;
 pub mod paths;
 pub mod pier;
 pub mod runtime;
@@ -139,41 +138,30 @@ async fn prepare_ship(
         })?;
         log_manager.add_launcher_line("No pier found, attempting extraction from bundle");
 
-        // Try to find bundled assets. In dev mode these may not exist.
-        // Check for a manifest + archive via env var or known paths.
+        // Try to find a pier archive via env var.
         let archive_path = std::env::var("SHIP_LAUNCHER_ARCHIVE_PATH")
             .map(PathBuf::from)
             .ok();
-        let manifest_path = std::env::var("SHIP_LAUNCHER_MANIFEST_PATH")
-            .map(PathBuf::from)
-            .ok();
 
-        if let (Some(archive), Some(manifest_file)) = (archive_path, manifest_path) {
-            if archive.exists() && manifest_file.exists() {
-                let manifest = manifest::PierManifest::from_file(&manifest_file)?;
-
-                log_manager.add_launcher_line("Verifying archive checksum...");
+        if let Some(archive) = archive_path {
+            if archive.exists() {
                 sm.transition(LauncherState::Extracting {
-                    message: "Verifying archive checksum...".into(),
+                    message: "Extracting pier archive...".into(),
                 })
                 .ok(); // May already be in Extracting
 
-                extract::run_extraction(&paths, &manifest, &archive)?;
+                extract::run_extraction(&paths, &archive)?;
 
                 log_manager.add_launcher_line("Extraction complete");
             } else {
-                let msg = format!(
-                    "Archive or manifest not found (archive: {}, manifest: {})",
-                    archive.display(),
-                    manifest_file.display()
-                );
+                let msg = format!("Archive not found: {}", archive.display());
                 log_manager.add_launcher_line(&msg);
                 sm.force_error(
-                    "Bundled pier archive not found".into(),
+                    "Pier archive not found".into(),
                     Some(msg),
                 );
                 return Err(errors::LauncherError::Extraction {
-                    reason: "bundled pier archive not found".into(),
+                    reason: "pier archive not found".into(),
                 });
             }
         } else {
@@ -188,30 +176,19 @@ async fn prepare_ship(
         sm.transition(LauncherState::Prepared)?;
     }
 
-    // Validate pier structure (best-effort: create a dummy manifest for validation if no manifest available).
-    let manifest_path = std::env::var("SHIP_LAUNCHER_MANIFEST_PATH")
-        .map(PathBuf::from)
-        .ok();
-    if let Some(ref mp) = manifest_path {
-        if mp.exists() {
-            if let Ok(manifest) = manifest::PierManifest::from_file(mp) {
-                log_manager.add_launcher_line("Validating pier structure...");
-                match pier::validate_pier(&paths.pier_dir, &manifest) {
-                    Ok(result) => {
-                        for w in &result.warnings {
-                            log_manager.add_launcher_line(&format!("Warning: {w}"));
-                        }
-                        if let Some(ref v) = result.info.vere_version {
-                            log_manager
-                                .add_launcher_line(&format!("Pier vere version: {v}"));
-                        }
-                    }
-                    Err(e) => {
-                        log_manager
-                            .add_launcher_line(&format!("Pier validation warning: {e}"));
-                    }
-                }
+    // Validate pier structure (best-effort).
+    log_manager.add_launcher_line("Validating pier structure...");
+    match pier::validate_pier(&paths.pier_dir) {
+        Ok(result) => {
+            for w in &result.warnings {
+                log_manager.add_launcher_line(&format!("Warning: {w}"));
             }
+            if let Some(ref v) = result.info.vere_version {
+                log_manager.add_launcher_line(&format!("Pier vere version: {v}"));
+            }
+        }
+        Err(e) => {
+            log_manager.add_launcher_line(&format!("Pier validation warning: {e}"));
         }
     }
 
@@ -556,8 +533,6 @@ async fn import_pier(
         .map(|s| s.to_string());
     let marker = extract::InstallMarker {
         extracted_at: chrono::Utc::now().to_rfc3339(),
-        archive_sha256: "user-imported".into(),
-        format_version: 1,
         ship_name,
     };
     marker.write(&paths.pier_dir)?;

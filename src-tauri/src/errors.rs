@@ -8,18 +8,6 @@ pub enum LauncherError {
     #[error("bundled asset not found: {path}")]
     BundledAssetNotFound { path: PathBuf },
 
-    #[error("manifest not found at {path}")]
-    ManifestNotFound { path: PathBuf },
-
-    #[error("manifest parse error: {reason}")]
-    ManifestParseError { reason: String },
-
-    #[error("manifest validation error: {reason}")]
-    ManifestValidation { reason: String },
-
-    #[error("checksum mismatch: expected {expected}, got {actual}")]
-    ChecksumMismatch { expected: String, actual: String },
-
     #[error("extraction error: {reason}")]
     Extraction { reason: String },
 

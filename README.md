@@ -60,8 +60,7 @@ All optional. Used to override bundled assets during development.
 | `SHIP_LAUNCHER_VERE_PATH` | Path to a `vere` binary. Skips auto-download when set |
 | `SHIP_LAUNCHER_FAKE_SHIP` | Ship name for fake mode, e.g. `dev` or `bus`. Skips pier extraction and boots with `vere -F <name>` |
 | `SHIP_LAUNCHER_DATA_DIR` | Override the app support directory (defaults to `~/Library/Application Support/ship-launcher`) |
-| `SHIP_LAUNCHER_ARCHIVE_PATH` | Path to a `.tar.zst` or `.tar.gz` pier archive |
-| `SHIP_LAUNCHER_MANIFEST_PATH` | Path to `pier-manifest.json` for archive verification |
+| `SHIP_LAUNCHER_ARCHIVE_PATH` | Path to a `.tar.zst`, `.tar.gz`, or `.zip` pier archive |
 
 #### Example: running a fake ~dev ship
 
@@ -106,7 +105,6 @@ The app downloads vere at runtime, so no binary needs to be bundled. To include 
 │       ├── health.rs       # Ship readiness polling
 │       ├── logs.rs         # Log capture and persistence
 │       ├── paths.rs        # Platform path resolution
-│       ├── manifest.rs     # Pier manifest parsing
 │       ├── version.rs      # Vere version compatibility
 │       ├── pier.rs         # Pier structure validation
 │       ├── bundle.rs       # Bundled asset discovery
