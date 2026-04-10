@@ -232,7 +232,7 @@ pub async fn dock_vere(
 
     // Already docked (.bin/ exists) but .run is missing — restore the hard link.
     if live_dir.is_dir() {
-        if let Some(docked_bin) = find_vere_in_dir(&live_dir) {
+        if let Some(docked_bin) = find_vere_in_live_dir(&live_dir) {
             log_manager.add_launcher_line(&format!(
                 "Pier already docked, restoring .run hard link from {}",
                 docked_bin.display()
@@ -290,7 +290,7 @@ pub async fn dock_vere(
 }
 
 /// Find a vere binary in a directory (looks for files starting with "vere-").
-fn find_vere_in_dir(dir: &Path) -> Option<std::path::PathBuf> {
+pub fn find_vere_in_live_dir(dir: &Path) -> Option<std::path::PathBuf> {
     let entries = std::fs::read_dir(dir).ok()?;
     for entry in entries.flatten() {
         let name = entry.file_name();

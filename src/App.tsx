@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
+import { open } from "@tauri-apps/plugin-dialog";
 import "./App.css";
 
 // -- Types matching Rust structs --
@@ -15,8 +16,7 @@ interface StatusResponse {
 interface DiagnosticsData {
   app_support_path: string;
   pier_path: string;
-  bundled_vere_version: string | null;
-  pier_vere_version: string | null;
+  vere_version: string | null;
   current_state: { state: string; context?: Record<string, unknown> };
   pid: number | null;
   last_exit_code: number | null;
@@ -159,12 +159,8 @@ function DiagnosticsModal({
             <DiagRow label="App support" value={data.app_support_path} />
             <DiagRow label="Pier path" value={data.pier_path} />
             <DiagRow
-              label="Vere (bundled)"
-              value={data.bundled_vere_version ?? "unknown"}
-            />
-            <DiagRow
-              label="Vere (pier)"
-              value={data.pier_vere_version ?? "unknown"}
+              label="Vere"
+              value={data.vere_version ? `v${data.vere_version}` : "unknown"}
             />
             <DiagRow
               label="Last exit code"
@@ -427,6 +423,60 @@ function CrashedScreen({
   );
 }
 
+function ImportScreen({
+  logs,
+}: {
+  logs: string[];
+}) {
+  const [importing, setImporting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const handleSelectArchive = useCallback(async () => {
+    setError(null);
+    try {
+      const selected = await open({
+        multiple: false,
+        filters: [
+          { name: "Pier Archive", extensions: ["gz", "tgz", "zst", "zip"] },
+        ],
+      });
+      if (!selected) return;
+
+      setImporting(true);
+      await invoke("import_pier", { archivePath: selected });
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setImporting(false);
+    }
+  }, []);
+
+  return (
+    <div className="screen">
+      <div className="screen-center">
+        <div className="import-icon">🪐</div>
+        <div className="import-title">Import your pier</div>
+        <div className="import-description">
+          No pier was found. Select a pier export (<code>.tar.gz</code>, <code>.zip</code>, or <code>.tar.zst</code>) to get started.
+        </div>
+        {error && (
+          <div className="import-error">{error}</div>
+        )}
+        <div className="actions">
+          <button
+            className="primary"
+            onClick={handleSelectArchive}
+            disabled={importing}
+          >
+            {importing ? "Importing..." : "Select Pier Archive"}
+          </button>
+        </div>
+      </div>
+      {importing && <LogPanel logs={logs} />}
+    </div>
+  );
+}
+
 // -- Main App --
 
 function App() {
@@ -465,6 +515,7 @@ function App() {
   }, []);
 
   // Auto-prepare on first load when Uninitialized.
+  // This will either proceed to extraction/boot or land on NeedsPier.
   useEffect(() => {
     if (
       status &&
@@ -572,8 +623,7 @@ function App() {
     stateName === "Uninitialized" ||
     stateName === "Extracting" ||
     stateName === "Prepared" ||
-    stateName === "Starting" ||
-    stateName === "Stopping";
+    stateName === "Starting";
 
   let badgeClass = "preparing";
   let badgeLabel = stateName;
@@ -583,6 +633,12 @@ function App() {
   } else if (stateName === "Stopped") {
     badgeClass = "stopped";
     badgeLabel = "Stopped";
+  } else if (stateName === "Stopping") {
+    badgeClass = "preparing";
+    badgeLabel = "Stopping";
+  } else if (stateName === "NeedsPier") {
+    badgeClass = "stopped";
+    badgeLabel = "No Pier";
   } else if (stateName === "Error") {
     badgeClass = "error";
     badgeLabel = "Error";
@@ -600,7 +656,7 @@ function App() {
           </span>
           <span className={`status-badge ${badgeClass}`}>
             <span
-              className={`status-dot${isPreparing || stateName === "Running" ? " pulse" : ""}`}
+              className={`status-dot${isPreparing || stateName === "Running" || stateName === "Stopping" ? " pulse" : ""}`}
             />
             {badgeLabel}
           </span>
@@ -617,6 +673,19 @@ function App() {
       </div>
       <div className="content">
         {isPreparing && <PreparingScreen status={status} logs={logs} />}
+        {stateName === "NeedsPier" && (
+          <ImportScreen logs={logs} />
+        )}
+        {stateName === "Stopping" && (
+          <div className="screen">
+            <div className="screen-center">
+              <div className="spinner" />
+              <div className="preparing-status">Stopping ship...</div>
+              <div className="ship-name">{shipDisplayName(status.ship_name)}</div>
+            </div>
+            <LogPanel logs={logs} />
+          </div>
+        )}
         {stateName === "Running" && (
           <RunningScreen
             status={status}

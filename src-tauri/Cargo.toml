@@ -29,6 +29,7 @@ chrono = { version = "0.4", features = ["serde"] }
 tar = "0.4"
 zstd = "0.13"
 flate2 = "1"
+zip = "2"
 tokio = { version = "1", features = ["process", "io-util", "sync", "time", "macros", "rt", "net"] }
 libc = "0.2"
 open = "5"
@@ -37,6 +38,7 @@ urbit-ob = "0.2"
 tauri-plugin-clipboard-manager = "2"
 tauri-plugin-single-instance = "2"
 reqwest = { version = "0.12", features = ["rustls-tls", "stream", "json"], default-features = false }
+tauri-plugin-dialog = "2.7.0"
 
 [dev-dependencies]
 tempfile = "3"

@@ -27,7 +27,7 @@ impl InstallMarker {
         pier_dir.join(INSTALL_MARKER_NAME)
     }
 
-    fn write(&self, pier_dir: &Path) -> Result<(), LauncherError> {
+    pub fn write(&self, pier_dir: &Path) -> Result<(), LauncherError> {
         let json = serde_json::to_string_pretty(self).map_err(|e| LauncherError::Extraction {
             reason: format!("failed to serialize install marker: {e}"),
         })?;
@@ -99,23 +99,31 @@ pub fn verify_checksum(archive_path: &Path, expected: &str) -> Result<(), Launch
     Ok(())
 }
 
-/// Extract a `.tar.zst` or `.tar.gz` archive into `dest_dir`.
+/// Extract a `.tar.zst`, `.tar.gz`, or `.zip` archive into `dest_dir`.
 pub fn extract_archive(archive_path: &Path, dest_dir: &Path) -> Result<(), LauncherError> {
     let ext = archive_path
         .to_str()
         .unwrap_or_default()
         .to_lowercase();
 
-    let file = fs::File::open(archive_path)?;
-
     if ext.ends_with(".tar.zst") {
+        let file = fs::File::open(archive_path)?;
         let decoder = zstd::Decoder::new(file)?;
         let mut archive = tar::Archive::new(decoder);
         archive.unpack(dest_dir)?;
     } else if ext.ends_with(".tar.gz") || ext.ends_with(".tgz") {
+        let file = fs::File::open(archive_path)?;
         let decoder = flate2::read::GzDecoder::new(file);
         let mut archive = tar::Archive::new(decoder);
         archive.unpack(dest_dir)?;
+    } else if ext.ends_with(".zip") {
+        let file = fs::File::open(archive_path)?;
+        let mut archive = zip::ZipArchive::new(file).map_err(|e| LauncherError::Extraction {
+            reason: format!("failed to open zip archive: {e}"),
+        })?;
+        archive.extract(dest_dir).map_err(|e| LauncherError::Extraction {
+            reason: format!("failed to extract zip archive: {e}"),
+        })?;
     } else {
         return Err(LauncherError::Extraction {
             reason: format!(
