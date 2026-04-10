@@ -230,12 +230,18 @@ function RunningScreen({
   onStop,
   onRestart,
   onOpenShip,
+  updateAvailable,
+  upgrading,
+  onUpgrade,
 }: {
   status: StatusResponse;
   logs: string[];
   onStop: () => void;
   onRestart: () => void;
   onOpenShip: () => void;
+  updateAvailable: string | null;
+  upgrading: boolean;
+  onUpgrade: () => void;
 }) {
   const ctx = status.context as { started_at?: string; pid?: number } | undefined;
   const startedAt = ctx?.started_at;
@@ -296,6 +302,18 @@ function RunningScreen({
           <button onClick={onStop}>Stop</button>
           <button onClick={onRestart}>Restart</button>
         </div>
+        {updateAvailable && (
+          <div className="update-banner">
+            <span>Vere v{updateAvailable} available</span>
+            <button
+              className="primary"
+              onClick={onUpgrade}
+              disabled={upgrading}
+            >
+              {upgrading ? "Upgrading..." : "Update & Restart"}
+            </button>
+          </div>
+        )}
       </div>
       <LogPanel logs={logs} />
     </div>
@@ -417,6 +435,8 @@ function App() {
   const [showDiagnostics, setShowDiagnostics] = useState(false);
   const [preparing, setPreparing] = useState(false);
   const prepareCalledRef = useRef(false);
+  const [updateAvailable, setUpdateAvailable] = useState<string | null>(null);
+  const [upgrading, setUpgrading] = useState(false);
 
   // Poll status and logs.
   useEffect(() => {
@@ -461,6 +481,37 @@ function App() {
         .finally(() => setPreparing(false));
     }
   }, [status, preparing]);
+
+  // Check for vere updates every 60 seconds while running.
+  useEffect(() => {
+    if (!status || status.state !== "Running") return;
+    let active = true;
+    const check = async () => {
+      while (active) {
+        try {
+          const latest = await invoke<string | null>("check_for_update");
+          if (active) setUpdateAvailable(latest);
+        } catch {
+          // Ignore — network may be unavailable.
+        }
+        await new Promise((r) => setTimeout(r, 3 * 60 * 60_000));
+      }
+    };
+    check();
+    return () => { active = false; };
+  }, [status?.state]);
+
+  const handleUpgrade = useCallback(async () => {
+    setUpgrading(true);
+    try {
+      await invoke("upgrade_vere");
+      setUpdateAvailable(null);
+    } catch {
+      // Error reflected in state.
+    } finally {
+      setUpgrading(false);
+    }
+  }, []);
 
   const handleStart = useCallback(async () => {
     try {
@@ -573,6 +624,9 @@ function App() {
             onStop={handleStop}
             onRestart={handleRestart}
             onOpenShip={handleOpenShip}
+            updateAvailable={updateAvailable}
+            upgrading={upgrading}
+            onUpgrade={handleUpgrade}
           />
         )}
         {stateName === "Stopped" && (

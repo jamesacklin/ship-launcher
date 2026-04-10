@@ -34,7 +34,7 @@ fn build_download_url(ver: &str) -> String {
 }
 
 /// Fetch the latest vere release version from the GitHub API.
-async fn fetch_latest_version(client: &reqwest::Client) -> Result<String, LauncherError> {
+pub async fn fetch_latest_version(client: &reqwest::Client) -> Result<String, LauncherError> {
     let resp = client
         .get("https://api.github.com/repos/urbit/vere/releases/latest")
         .header("User-Agent", "ship-launcher")
@@ -69,7 +69,7 @@ async fn fetch_latest_version(client: &reqwest::Client) -> Result<String, Launch
 }
 
 /// Read the pier's `.vere.txt` to determine the expected vere version.
-fn version_from_pier(pier_dir: &Path) -> Option<String> {
+pub fn version_from_pier(pier_dir: &Path) -> Option<String> {
     let raw = std::fs::read_to_string(pier_dir.join(".vere.txt")).ok()?;
     let parsed = version::parse_version(raw.trim())?;
     Some(format!("{}.{}", parsed.major, parsed.minor))
