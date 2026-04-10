@@ -212,20 +212,41 @@ pub async fn ensure_vere(
 
 /// Dock the vere binary into the pier so the pier becomes self-contained.
 ///
-/// Runs `vere dock <pier>`, which copies the binary into `<pier>/.run`.
+/// `vere dock <pier>` copies the binary into `<pier>/.bin/live/` and creates
+/// a `<pier>/.run` hard link to it. If `.bin/` exists (already docked) but
+/// `.run` is missing, we restore the hard link. Only runs `vere dock` when
+/// `.bin/` is absent entirely.
 /// After docking, the standalone binary at `vere_path` is deleted.
-/// If the pier already has a `.run` file, this is a no-op.
 pub async fn dock_vere(
     vere_path: &Path,
     pier_path: &Path,
     log_manager: &LogManager,
 ) -> Result<(), LauncherError> {
     let run_path = pier_path.join(".run");
-    if run_path.is_file() {
-        log_manager.add_launcher_line("Pier already has docked .run binary");
+    if run_path.exists() {
+        log_manager.add_launcher_line("Pier already has .run binary");
         return Ok(());
     }
 
+    let live_dir = pier_path.join(".bin").join("live");
+
+    // Already docked (.bin/ exists) but .run is missing — restore the hard link.
+    if live_dir.is_dir() {
+        if let Some(docked_bin) = find_vere_in_dir(&live_dir) {
+            log_manager.add_launcher_line(&format!(
+                "Pier already docked, restoring .run hard link from {}",
+                docked_bin.display()
+            ));
+            std::fs::hard_link(&docked_bin, &run_path).map_err(|e| {
+                LauncherError::Download {
+                    reason: format!("failed to restore .run hard link: {e}"),
+                }
+            })?;
+            return Ok(());
+        }
+    }
+
+    // Not docked at all — run `vere dock`.
     if !vere_path.is_file() {
         return Err(LauncherError::Download {
             reason: format!(
@@ -256,7 +277,7 @@ pub async fn dock_vere(
         });
     }
 
-    if !run_path.is_file() {
+    if !run_path.exists() {
         return Err(LauncherError::Download {
             reason: "vere dock succeeded but .run file not found in pier".into(),
         });
@@ -266,6 +287,19 @@ pub async fn dock_vere(
     let _ = std::fs::remove_file(vere_path);
 
     Ok(())
+}
+
+/// Find a vere binary in a directory (looks for files starting with "vere-").
+fn find_vere_in_dir(dir: &Path) -> Option<std::path::PathBuf> {
+    let entries = std::fs::read_dir(dir).ok()?;
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let name_str = name.to_string_lossy();
+        if name_str.starts_with("vere-") || name_str == "vere" {
+            return Some(entry.path());
+        }
+    }
+    None
 }
 
 #[cfg(test)]
