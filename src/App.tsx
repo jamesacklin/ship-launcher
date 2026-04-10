@@ -1,5 +1,6 @@
 import { useEffect, useState, useCallback, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import "./App.css";
 
 // -- Types matching Rust structs --
@@ -130,7 +131,7 @@ function DiagnosticsModal({
     const text = Object.entries(data)
       .map(([k, v]) => `${k}: ${typeof v === "object" ? JSON.stringify(v) : v}`)
       .join("\n");
-    navigator.clipboard.writeText(text).then(() => {
+    writeText(text).then(() => {
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     });
@@ -240,6 +241,9 @@ function RunningScreen({
   const startedAt = ctx?.started_at;
 
   const [uptime, setUptime] = useState("");
+  const [codeCopied, setCodeCopied] = useState(false);
+  const [codeLoading, setCodeLoading] = useState(false);
+
   useEffect(() => {
     if (!startedAt) return;
     const update = () => setUptime(formatUptime(startedAt));
@@ -247,6 +251,20 @@ function RunningScreen({
     const interval = setInterval(update, 1000);
     return () => clearInterval(interval);
   }, [startedAt]);
+
+  const handleCopyCode = useCallback(async () => {
+    setCodeLoading(true);
+    try {
+      const code = await invoke<string>("get_login_code");
+      await writeText(code);
+      setCodeCopied(true);
+      setTimeout(() => setCodeCopied(false), 2000);
+    } catch (e) {
+      console.error("Failed to get +code:", e);
+    } finally {
+      setCodeLoading(false);
+    }
+  }, []);
 
   return (
     <div className="screen">
@@ -268,6 +286,12 @@ function RunningScreen({
             disabled={!status.is_ready}
           >
             {status.is_ready ? (<>Web access <span aria-hidden="true" style={{ fontSize: "10px" }}>{"\u2197"}</span></>) : "Waiting for ship..."}
+          </button>
+          <button
+            onClick={handleCopyCode}
+            disabled={!status.is_ready || codeLoading}
+          >
+            {codeCopied ? "Copied!" : codeLoading ? "Getting..." : "Copy +code"}
           </button>
           <button onClick={onStop}>Stop</button>
           <button onClick={onRestart}>Restart</button>

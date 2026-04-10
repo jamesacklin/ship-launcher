@@ -1,4 +1,5 @@
 pub mod bundle;
+pub mod click;
 pub mod errors;
 pub mod extract;
 pub mod health;
@@ -351,6 +352,22 @@ fn get_diagnostics(
 }
 
 #[tauri::command]
+async fn get_login_code(
+    app_paths: tauri::State<'_, AppPaths>,
+    runtime: tauri::State<'_, RuntimeManager>,
+) -> Result<String, errors::LauncherError> {
+    // Determine the pier path (same logic as run()).
+    let pier_path = if runtime.fake_ship().is_some() {
+        app_paths
+            .data_dir
+            .join(runtime.fake_ship().unwrap())
+    } else {
+        app_paths.pier_dir.clone()
+    };
+    click::get_code(&pier_path).await
+}
+
+#[tauri::command]
 async fn reset_ship(
     state_machine: tauri::State<'_, StateMachine>,
     runtime: tauri::State<'_, RuntimeManager>,
@@ -432,8 +449,13 @@ pub fn run() {
         runtime = runtime.with_fake_ship(name.clone());
     }
 
+    let runtime_for_exit = runtime.clone();
+    let log_for_exit = log_manager.clone();
+    let sm_for_exit = state_machine.clone();
+
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_clipboard_manager::init())
         .manage(state_machine)
         .manage(runtime)
         .manage(app_paths)
@@ -449,8 +471,28 @@ pub fn run() {
             open_ship,
             reveal_data_dir,
             get_diagnostics,
+            get_login_code,
             reset_ship,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(move |_app, event| {
+            if let tauri::RunEvent::ExitRequested { .. } = &event {
+                if let Some(pid) = runtime_for_exit.pid() {
+                    log_for_exit.add_launcher_line("Window closed — stopping vere");
+                    let _ = sm_for_exit.transition(LauncherState::Stopping);
+                    // Kill the entire process group so the vere worker subprocess
+                    // is also terminated (vere spawns a `work` child).
+                    #[cfg(unix)]
+                    unsafe {
+                        // Try process group first (negative PID).
+                        libc::kill(-(pid as libc::pid_t), libc::SIGTERM);
+                        // Also signal the parent directly in case it's not a
+                        // process group leader.
+                        libc::kill(pid as libc::pid_t, libc::SIGTERM);
+                    }
+                    log_for_exit.add_launcher_line("Sent SIGTERM to vere process group, exiting");
+                }
+            }
+        });
 }
