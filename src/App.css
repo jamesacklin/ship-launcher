@@ -355,6 +355,44 @@ button.icon-btn:hover {
   font-style: italic;
 }
 
+/* Import pier screen */
+.import-icon {
+  font-size: 32px;
+  line-height: 1;
+}
+
+.import-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: #1a1a1a;
+}
+
+.import-description {
+  font-size: 13px;
+  color: #6b7280;
+  max-width: 320px;
+  text-align: center;
+}
+
+.import-description code {
+  font-family: "Source Code Pro", "SF Mono", "Menlo", monospace;
+  font-size: 12px;
+  background: #f3f4f6;
+  padding: 1px 5px;
+  border-radius: 3px;
+}
+
+.import-error {
+  font-size: 12px;
+  color: #dc2626;
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  border-radius: 6px;
+  padding: 8px 12px;
+  max-width: 360px;
+  word-break: break-word;
+}
+
 /* Error/Crashed screens */
 .error-box {
   background: #fef2f2;
@@ -682,5 +720,20 @@ button.icon-btn:hover {
 
   .info-label {
     color: #6b7280;
+  }
+
+  .import-title {
+    color: #e5e7eb;
+  }
+
+  .import-description code {
+    background: #374151;
+    color: #d1d5db;
+  }
+
+  .import-error {
+    color: #f87171;
+    background: #450a0a;
+    border-color: #7f1d1d;
   }
 }

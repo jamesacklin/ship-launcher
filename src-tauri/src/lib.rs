@@ -125,9 +125,10 @@ async fn prepare_ship(
 
     if pier_exists {
         log_manager.add_launcher_line("Pier already exists, skipping extraction");
-        // Transition to Prepared (skip Extracting). Handle case where we're already past Uninitialized.
+        // Transition to Prepared. We may be in Uninitialized (no vere download needed)
+        // or Extracting (vere was just downloaded by ensure_vere above).
         let current = sm.current();
-        if matches!(current, LauncherState::Uninitialized) {
+        if matches!(current, LauncherState::Uninitialized | LauncherState::Extracting { .. }) {
             sm.transition(LauncherState::Prepared)?;
         }
     } else {
@@ -176,16 +177,10 @@ async fn prepare_ship(
             }
         } else {
             log_manager.add_launcher_line(
-                "No SHIP_LAUNCHER_ARCHIVE_PATH or SHIP_LAUNCHER_MANIFEST_PATH set, \
-                 and no bundled assets found. Place a pier at the pier directory manually.",
+                "No bundled pier archive found. Waiting for user to import a pier.",
             );
-            sm.force_error(
-                "No pier archive available".into(),
-                Some("Set SHIP_LAUNCHER_ARCHIVE_PATH and SHIP_LAUNCHER_MANIFEST_PATH env vars, or place a pier manually".into()),
-            );
-            return Err(errors::LauncherError::Extraction {
-                reason: "no pier archive available for extraction".into(),
-            });
+            sm.transition(LauncherState::NeedsPier)?;
+            return Ok(());
         }
 
         // Transition to Prepared after extraction.
@@ -419,7 +414,17 @@ async fn check_for_update(
         app_paths.pier_dir.clone()
     };
 
-    let current = download::version_from_pier(&pier_path);
+    // Try .vere.txt first, then fall back to querying the docked .run binary.
+    let current = download::version_from_pier(&pier_path).or_else(|| {
+        let run_path = pier_path.join(".run");
+        if run_path.exists() {
+            version::get_bundled_version(&run_path)
+                .ok()
+                .map(|v| format!("{}.{}", v.major, v.minor))
+        } else {
+            None
+        }
+    });
 
     let client = reqwest::Client::new();
     let latest = download::fetch_latest_version(&client).await?;
@@ -477,6 +482,131 @@ async fn upgrade_vere(
 
     log_manager.add_launcher_line("Upgrade complete, restarting ship...");
     runtime.start().await?;
+
+    Ok(())
+}
+
+/// Import a pier from a user-selected .tar.gz archive.
+///
+/// Extracts the archive into the pier directory, validates the structure,
+/// docks vere, and auto-starts the runtime.
+#[tauri::command]
+async fn import_pier(
+    archive_path: String,
+    state_machine: tauri::State<'_, StateMachine>,
+    runtime: tauri::State<'_, RuntimeManager>,
+    app_paths: tauri::State<'_, AppPaths>,
+) -> Result<(), errors::LauncherError> {
+    let sm = state_machine.inner().clone();
+    let rt = runtime.inner().clone();
+    let paths = app_paths.inner().clone();
+    let log_manager = rt.log_manager().clone();
+
+    let archive = PathBuf::from(&archive_path);
+    if !archive.exists() {
+        return Err(errors::LauncherError::Extraction {
+            reason: format!("archive not found: {}", archive.display()),
+        });
+    }
+
+    sm.transition(LauncherState::Extracting {
+        message: "Extracting pier archive...".into(),
+    })?;
+    log_manager.add_launcher_line(&format!("Importing pier from {}", archive.display()));
+
+    // Extract to a temp directory inside data_dir.
+    let temp_dir = paths.data_dir.join(format!(
+        ".extract-tmp-{}",
+        std::process::id()
+    ));
+    if temp_dir.exists() {
+        std::fs::remove_dir_all(&temp_dir)?;
+    }
+    std::fs::create_dir_all(&temp_dir)?;
+
+    log_manager.add_launcher_line("Extracting archive...");
+    sm.transition(LauncherState::Extracting {
+        message: "Extracting archive...".into(),
+    })
+    .ok();
+
+    if let Err(e) = extract::extract_archive(&archive, &temp_dir) {
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        sm.force_error("Extraction failed".into(), Some(e.to_string()));
+        return Err(e);
+    }
+
+    // Validate the extracted pier structure.
+    let pier_root = match extract::validate_extracted_pier(&temp_dir) {
+        Ok(p) => p,
+        Err(e) => {
+            let _ = std::fs::remove_dir_all(&temp_dir);
+            sm.force_error("Invalid pier archive".into(), Some(e.to_string()));
+            return Err(e);
+        }
+    };
+
+    // Move the pier to the final location.
+    if paths.pier_dir.exists() {
+        std::fs::remove_dir_all(&paths.pier_dir)?;
+    }
+    std::fs::rename(&pier_root, &paths.pier_dir).map_err(|e| {
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        errors::LauncherError::Extraction {
+            reason: format!("failed to move pier to final location: {e}"),
+        }
+    })?;
+    let _ = std::fs::remove_dir_all(&temp_dir);
+
+    // Write an install marker.
+    let ship_name = pier_root
+        .file_name()
+        .and_then(|n| n.to_str())
+        .map(|s| s.to_string());
+    let marker = extract::InstallMarker {
+        extracted_at: chrono::Utc::now().to_rfc3339(),
+        archive_sha256: "user-imported".into(),
+        format_version: 1,
+        ship_name,
+    };
+    marker.write(&paths.pier_dir)?;
+
+    log_manager.add_launcher_line("Pier imported successfully");
+
+    sm.transition(LauncherState::Prepared)?;
+
+    let has_bin = paths.pier_dir.join(".bin").is_dir();
+
+    if has_bin {
+        // Already docked — ensure .run hard link exists, then boot with it.
+        log_manager.add_launcher_line("Pier already has .bin, skipping download");
+        let run_path = paths.pier_dir.join(".run");
+        if !run_path.exists() {
+            // .bin exists but .run is missing — restore the hard link.
+            let live_dir = paths.pier_dir.join(".bin").join("live");
+            if let Some(docked_bin) = download::find_vere_in_live_dir(&live_dir) {
+                log_manager.add_launcher_line("Restoring .run hard link");
+                std::fs::hard_link(&docked_bin, &run_path)?;
+            } else {
+                return Err(errors::LauncherError::Runtime {
+                    reason: "pier has .bin but no vere binary found inside .bin/live/".into(),
+                });
+            }
+        }
+    } else {
+        // No .bin — need to download vere and dock it.
+        if std::env::var("SHIP_LAUNCHER_VERE_PATH").is_err() {
+            let vere_path = paths.data_dir.join("bin").join("vere");
+            download::ensure_vere(&vere_path, &paths.pier_dir, &sm, &log_manager).await?;
+        }
+        let vere_for_dock = std::env::var("SHIP_LAUNCHER_VERE_PATH")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| paths.data_dir.join("bin").join("vere"));
+        download::dock_vere(&vere_for_dock, &paths.pier_dir, &log_manager).await?;
+    }
+
+    log_manager.add_launcher_line("Auto-starting runtime...");
+    rt.start().await?;
 
     Ok(())
 }
@@ -570,10 +700,10 @@ pub fn run() {
     let runtime_for_exit = runtime.clone();
     let log_for_exit = log_manager.clone();
     let sm_for_exit = state_machine.clone();
-
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_clipboard_manager::init())
+        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             // A second instance was launched — focus the existing window.
             if let Some(window) = app.webview_windows().values().next() {
@@ -599,6 +729,7 @@ pub fn run() {
             get_login_code,
             check_for_update,
             upgrade_vere,
+            import_pier,
             retry_boot,
         ])
         .build(tauri::generate_context!())
@@ -608,17 +739,50 @@ pub fn run() {
                 if let Some(pid) = runtime_for_exit.pid() {
                     log_for_exit.add_launcher_line("Window closed — stopping vere");
                     let _ = sm_for_exit.transition(LauncherState::Stopping);
-                    // Kill the entire process group so the vere worker subprocess
-                    // is also terminated (vere spawns a `work` child).
+
                     #[cfg(unix)]
-                    unsafe {
-                        // Try process group first (negative PID).
-                        libc::kill(-(pid as libc::pid_t), libc::SIGTERM);
-                        // Also signal the parent directly in case it's not a
-                        // process group leader.
-                        libc::kill(pid as libc::pid_t, libc::SIGTERM);
+                    {
+                        // SIGTERM the process group + parent.
+                        unsafe {
+                            libc::kill(-(pid as libc::pid_t), libc::SIGTERM);
+                            libc::kill(pid as libc::pid_t, libc::SIGTERM);
+                        }
+                        log_for_exit.add_launcher_line("Sent SIGTERM, waiting for vere to exit");
+
+                        // Block until vere actually exits (releases .vere.lock),
+                        // with a timeout so we don't hang forever.
+                        use std::time::{Duration, Instant};
+                        let deadline = Instant::now() + Duration::from_secs(10);
+                        loop {
+                            // waitpid with WNOHANG: reap if exited, don't block.
+                            let ret = unsafe {
+                                libc::waitpid(pid as libc::pid_t, std::ptr::null_mut(), libc::WNOHANG)
+                            };
+                            // ret > 0: reaped. ret == -1: not our child or already reaped.
+                            // Either way, check if still alive.
+                            if ret != 0 {
+                                break;
+                            }
+                            // Also check with kill(0) — covers processes we can't waitpid.
+                            let alive = unsafe { libc::kill(pid as libc::pid_t, 0) } == 0;
+                            if !alive {
+                                break;
+                            }
+                            if Instant::now() >= deadline {
+                                // Force kill after timeout.
+                                log_for_exit.add_launcher_line("Timeout waiting for vere, sending SIGKILL");
+                                unsafe {
+                                    libc::kill(-(pid as libc::pid_t), libc::SIGKILL);
+                                    libc::kill(pid as libc::pid_t, libc::SIGKILL);
+                                }
+                                // Brief wait for SIGKILL to take effect.
+                                std::thread::sleep(Duration::from_millis(500));
+                                break;
+                            }
+                            std::thread::sleep(Duration::from_millis(100));
+                        }
+                        log_for_exit.add_launcher_line("vere process exited");
                     }
-                    log_for_exit.add_launcher_line("Sent SIGTERM to vere process group, exiting");
                 }
             }
         });

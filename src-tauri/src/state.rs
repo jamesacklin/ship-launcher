@@ -47,6 +47,9 @@ pub enum LauncherState {
         message: String,
     },
 
+    /// No pier found and no bundled archive — user must import one.
+    NeedsPier,
+
     /// An error occurred during preparation or runtime management.
     Error {
         /// Concise error summary for display.
@@ -67,6 +70,7 @@ impl LauncherState {
             Self::Running { .. } => "Running",
             Self::Stopping => "Stopping",
             Self::Stopped => "Stopped",
+            Self::NeedsPier => "NeedsPier",
             Self::Crashed { .. } => "Crashed",
             Self::Error { .. } => "Error",
         }
@@ -75,13 +79,14 @@ impl LauncherState {
     /// Returns the set of states this state is allowed to transition to.
     fn allowed_transitions(&self) -> &'static [&'static str] {
         match self {
-            Self::Uninitialized => &["Extracting", "Prepared", "Error"],
-            Self::Extracting { .. } => &["Extracting", "Prepared", "Error"],
+            Self::Uninitialized => &["Extracting", "Prepared", "NeedsPier", "Error"],
+            Self::Extracting { .. } => &["Extracting", "Prepared", "NeedsPier", "Error"],
             Self::Prepared => &["Starting", "Error", "Uninitialized"],
             Self::Starting => &["Running", "Crashed", "Error"],
             Self::Running { .. } => &["Stopping", "Stopped", "Crashed", "Error"],
             Self::Stopping => &["Stopped", "Crashed", "Error"],
             Self::Stopped => &["Starting", "Uninitialized"],
+            Self::NeedsPier => &["Extracting", "Prepared", "Error", "Uninitialized"],
             Self::Crashed { .. } => &["Starting", "Uninitialized"],
             Self::Error { .. } => &["Uninitialized", "Extracting", "Prepared", "Starting"],
         }

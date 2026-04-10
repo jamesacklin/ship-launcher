@@ -331,6 +331,11 @@ impl RuntimeManager {
         self.http_port
     }
 
+    /// Returns the pier path used by this runtime.
+    pub fn pier_path(&self) -> &std::path::Path {
+        &self.pier_path
+    }
+
     /// Returns a reference to the log manager for external use.
     pub fn log_manager(&self) -> &LogManager {
         &self.log_manager
