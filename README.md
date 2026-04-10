@@ -2,13 +2,22 @@
 
 A desktop application that wraps the Urbit runtime (`vere`) and a bundled pier into a single download-and-run experience. Built with [Tauri](https://tauri.app/), React, and TypeScript.
 
+![Ship Launcher running a fake ~nec ship](docs/screenshot.png)
+
 ## For Users
 
 Ship Launcher packages an Urbit ship so you can run it like any other desktop app. Download the `.app` (macOS), install it, and double-click to start.
 
 On first launch, the app automatically downloads the correct version of the Urbit runtime, extracts the bundled pier, and starts everything up. If the pier has a `.vere.txt` specifying a version, that exact version is fetched; otherwise the latest release is used. A dashboard shows your ship's status, recent logs, and controls to stop, restart, or retry booting if something goes wrong.
 
-Once the ship is ready, click **Open Ship** to open your ship's web interface in a browser. You can copy your access `+code` from the main window.
+Once the ship is ready, click **Web access** to open your ship's web interface in a browser. You can copy your access `+code` from the main window.
+
+### System tray
+
+When you close the window, the app minimizes to the system tray instead of quitting. This keeps your ship running in the background. Right-click the tray icon for a menu with:
+
+- **Show Interface** — brings the window back
+- **Quit** — gracefully stops the ship and exits the app
 
 ### Troubleshooting
 
@@ -102,6 +111,8 @@ The app downloads vere at runtime, so no binary needs to be bundled. To include 
 │       ├── lock.rs         # Single-instance guard
 │       ├── click.rs        # Login code retrieval
 │       └── errors.rs       # Error types
+├── docs/
+│   └── screenshot.png      # App screenshot
 ├── tasks/
 │   └── prd-launcher.md     # Product requirements
 └── package.json
