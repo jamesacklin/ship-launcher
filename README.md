@@ -4,9 +4,11 @@ A desktop application that wraps the Urbit runtime (`vere`) and a bundled pier i
 
 ![Ship Launcher running a fake ~nec ship](docs/screenshot.png)
 
+> **Note:** There are no pre-built downloads available yet. This app is intended to be built by Tlon Hosting's CI as one-off distributions — when a user exports a pier, the CI produces a ready-to-run executable bundling that pier. If you happen to have a pier archive (`.tar.zst` or `.tar.gz`) you'd like to run, you can also build the app yourself using the development instructions below.
+
 ## For Users
 
-Ship Launcher packages an Urbit ship so you can run it like any other desktop app. Download the `.app` (macOS), install it, and double-click to start.
+Ship Launcher packages an Urbit ship so you can run it like any other desktop app — once built, just install the `.app` (macOS) and double-click to start.
 
 On first launch, the app automatically downloads the correct version of the Urbit runtime, extracts the bundled pier, and starts everything up. If the pier has a `.vere.txt` specifying a version, that exact version is fetched; otherwise the latest release is used. A dashboard shows your ship's status, recent logs, and controls to stop, restart, or retry booting if something goes wrong.
 
