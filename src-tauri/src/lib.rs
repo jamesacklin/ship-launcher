@@ -106,6 +106,15 @@ async fn prepare_ship(
             sm.transition(LauncherState::Prepared)?;
         }
 
+        // Dock vere into the pier if it already exists from a previous boot.
+        let fake_pier = paths.data_dir.join(name);
+        if fake_pier.join(".urb").is_dir() {
+            let vere_for_dock = std::env::var("SHIP_LAUNCHER_VERE_PATH")
+                .map(PathBuf::from)
+                .unwrap_or_else(|_| paths.data_dir.join("bin").join("vere"));
+            download::dock_vere(&vere_for_dock, &fake_pier, &log_manager).await?;
+        }
+
         log_manager.add_launcher_line("Auto-starting runtime (fake mode)...");
         rt.start().await?;
         return Ok(());
@@ -238,6 +247,20 @@ async fn prepare_ship(
                 }
             }
         }
+    }
+
+    // Dock vere into the pier if not already docked.
+    // This makes the pier self-contained with a .run binary.
+    let pier_for_dock = if rt.fake_ship().is_some() {
+        paths.data_dir.join(rt.fake_ship().unwrap())
+    } else {
+        paths.pier_dir.clone()
+    };
+    if pier_for_dock.join(".urb").is_dir() {
+        let vere_for_dock = std::env::var("SHIP_LAUNCHER_VERE_PATH")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| paths.data_dir.join("bin").join("vere"));
+        download::dock_vere(&vere_for_dock, &pier_for_dock, &log_manager).await?;
     }
 
     log_manager.add_launcher_line("Ship preparation complete");

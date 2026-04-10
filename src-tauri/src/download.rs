@@ -210,6 +210,64 @@ pub async fn ensure_vere(
     Ok(())
 }
 
+/// Dock the vere binary into the pier so the pier becomes self-contained.
+///
+/// Runs `vere dock <pier>`, which copies the binary into `<pier>/.run`.
+/// After docking, the standalone binary at `vere_path` is deleted.
+/// If the pier already has a `.run` file, this is a no-op.
+pub async fn dock_vere(
+    vere_path: &Path,
+    pier_path: &Path,
+    log_manager: &LogManager,
+) -> Result<(), LauncherError> {
+    let run_path = pier_path.join(".run");
+    if run_path.is_file() {
+        log_manager.add_launcher_line("Pier already has docked .run binary");
+        return Ok(());
+    }
+
+    if !vere_path.is_file() {
+        return Err(LauncherError::Download {
+            reason: format!(
+                "cannot dock: vere binary not found at {}",
+                vere_path.display()
+            ),
+        });
+    }
+
+    log_manager.add_launcher_line(&format!(
+        "Docking vere into pier at {}",
+        pier_path.display()
+    ));
+
+    let output = tokio::process::Command::new(vere_path)
+        .arg("dock")
+        .arg(pier_path)
+        .output()
+        .await
+        .map_err(|e| LauncherError::Download {
+            reason: format!("failed to run vere dock: {e}"),
+        })?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(LauncherError::Download {
+            reason: format!("vere dock failed (exit {}): {}", output.status, stderr.trim()),
+        });
+    }
+
+    if !run_path.is_file() {
+        return Err(LauncherError::Download {
+            reason: "vere dock succeeded but .run file not found in pier".into(),
+        });
+    }
+
+    log_manager.add_launcher_line("Dock complete, removing standalone vere binary");
+    let _ = std::fs::remove_file(vere_path);
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
