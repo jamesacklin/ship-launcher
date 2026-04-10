@@ -4,14 +4,12 @@ use crate::errors::LauncherError;
 
 const VERE_BIN: &str = "bin/vere";
 const PIER_ARCHIVE: &str = "assets/pier.tar.zst";
-const PIER_MANIFEST: &str = "assets/pier-manifest.json";
 
 /// Locations of bundled assets inside the app's resource directory.
 #[derive(Debug, Clone)]
 pub struct BundledAssets {
     pub vere: PathBuf,
     pub pier_archive: PathBuf,
-    pub manifest: PathBuf,
 }
 
 impl BundledAssets {
@@ -22,10 +20,7 @@ impl BundledAssets {
     pub fn locate(resource_dir: &Path) -> Result<Self, LauncherError> {
         let vere = resource_dir.join(VERE_BIN);
         let pier_archive = resource_dir.join(PIER_ARCHIVE);
-        let manifest = resource_dir.join(PIER_MANIFEST);
 
-        // Only require vere and the archive to exist. The manifest is
-        // validated separately (it may be absent in dev builds).
         if !vere.exists() {
             return Err(LauncherError::BundledAssetNotFound { path: vere });
         }
@@ -38,13 +33,7 @@ impl BundledAssets {
         Ok(Self {
             vere,
             pier_archive,
-            manifest,
         })
-    }
-
-    /// Check whether the manifest file exists on disk.
-    pub fn has_manifest(&self) -> bool {
-        self.manifest.exists()
     }
 }
 
@@ -69,17 +58,6 @@ mod tests {
         let assets = BundledAssets::locate(&dir).unwrap();
         assert!(assets.vere.ends_with("bin/vere"));
         assert!(assets.pier_archive.ends_with("assets/pier.tar.zst"));
-        assert!(!assets.has_manifest());
-
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn locate_succeeds_with_manifest() {
-        let dir = make_resource_dir("with-manifest");
-        std::fs::write(dir.join(PIER_MANIFEST), b"{}").unwrap();
-        let assets = BundledAssets::locate(&dir).unwrap();
-        assert!(assets.has_manifest());
 
         let _ = std::fs::remove_dir_all(&dir);
     }

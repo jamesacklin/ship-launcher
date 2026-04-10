@@ -3,7 +3,6 @@ use std::path::Path;
 
 use crate::errors::LauncherError;
 use crate::extract::InstallMarker;
-use crate::manifest::PierManifest;
 
 /// Information extracted from inspecting the pier directory.
 #[derive(Debug, Clone, serde::Serialize)]
@@ -18,7 +17,7 @@ pub struct PierInfo {
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct PierValidationResult {
     pub info: PierInfo,
-    /// Non-fatal warnings (e.g., ship name mismatch).
+    /// Non-fatal warnings (e.g., structural issues).
     pub warnings: Vec<String>,
 }
 
@@ -28,10 +27,9 @@ pub struct PierValidationResult {
 /// 1. Pier directory exists
 /// 2. `.urb` subdirectory exists and expected layout is intact
 /// 3. Reads `.vere.txt` if present and exposes the runtime version
-/// 4. Detects ship name from install marker and compares against manifest
+/// 4. Detects ship name from install marker
 pub fn validate_pier(
     pier_dir: &Path,
-    manifest: &PierManifest,
 ) -> Result<PierValidationResult, LauncherError> {
     if !pier_dir.is_dir() {
         return Err(LauncherError::PierValidation {
@@ -51,21 +49,9 @@ pub fn validate_pier(
 
     validate_urb_layout(&urb_dir)?;
 
-    let mut warnings = Vec::new();
-
+    let warnings = Vec::new();
     let vere_version = read_vere_version(pier_dir);
     let detected_ship_name = detect_ship_name(pier_dir);
-
-    if let Some(ref detected) = detected_ship_name {
-        let manifest_normalized = normalize_ship_name(&manifest.ship);
-        let detected_normalized = normalize_ship_name(detected);
-        if manifest_normalized != detected_normalized {
-            warnings.push(format!(
-                "ship name mismatch: manifest says '{}', pier structure suggests '{}'",
-                manifest.ship, detected
-            ));
-        }
-    }
 
     Ok(PierValidationResult {
         info: PierInfo {
@@ -131,11 +117,6 @@ fn detect_ship_name(pier_dir: &Path) -> Option<String> {
     None
 }
 
-/// Normalize a ship name for comparison: strip leading `~` and lowercase.
-fn normalize_ship_name(name: &str) -> String {
-    name.trim().trim_start_matches('~').to_lowercase()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -147,19 +128,6 @@ mod tests {
         p
     }
 
-    fn make_manifest(ship: &str) -> PierManifest {
-        PierManifest {
-            format_version: 1,
-            ship: ship.into(),
-            exported_at: "2026-04-09T15:30:00Z".into(),
-            archive_name: "pier.tar.zst".into(),
-            archive_sha256: "abc123".into(),
-            vere_version: "vere-v3.1".into(),
-            launcher_min_version: None,
-            notes: None,
-        }
-    }
-
     fn create_valid_pier(pier_dir: &Path) {
         fs::create_dir_all(pier_dir.join(".urb/log")).unwrap();
         fs::create_dir_all(pier_dir.join(".urb/chk")).unwrap();
@@ -168,8 +136,6 @@ mod tests {
     fn write_install_marker(pier_dir: &Path, ship_name: Option<&str>) {
         let marker = InstallMarker {
             extracted_at: "2026-04-09T00:00:00Z".into(),
-            archive_sha256: "abc123".into(),
-            format_version: 1,
             ship_name: ship_name.map(|s| s.into()),
         };
         let json = serde_json::to_string_pretty(&marker).unwrap();
@@ -182,8 +148,7 @@ mod tests {
         let pier = dir.join("pier");
         create_valid_pier(&pier);
 
-        let manifest = make_manifest("~sampel-palnet");
-        let result = validate_pier(&pier, &manifest).unwrap();
+        let result = validate_pier(&pier).unwrap();
 
         assert!(result.info.vere_version.is_none());
         assert!(result.info.detected_ship_name.is_none());
@@ -199,8 +164,7 @@ mod tests {
         create_valid_pier(&pier);
         fs::write(pier.join(".vere.txt"), "vere-v4.3\n").unwrap();
 
-        let manifest = make_manifest("~sampel-palnet");
-        let result = validate_pier(&pier, &manifest).unwrap();
+        let result = validate_pier(&pier).unwrap();
 
         assert_eq!(result.info.vere_version.as_deref(), Some("vere-v4.3"));
         assert!(result.warnings.is_empty());
@@ -215,8 +179,7 @@ mod tests {
         create_valid_pier(&pier);
         fs::write(pier.join(".vere.txt"), "   \n").unwrap();
 
-        let manifest = make_manifest("~sampel-palnet");
-        let result = validate_pier(&pier, &manifest).unwrap();
+        let result = validate_pier(&pier).unwrap();
 
         assert!(result.info.vere_version.is_none());
 
@@ -224,14 +187,13 @@ mod tests {
     }
 
     #[test]
-    fn ship_name_from_marker_matches_manifest() {
+    fn ship_name_from_marker() {
         let dir = test_dir("ship-match");
         let pier = dir.join("pier");
         create_valid_pier(&pier);
         write_install_marker(&pier, Some("soltel-novhex"));
 
-        let manifest = make_manifest("~soltel-novhex");
-        let result = validate_pier(&pier, &manifest).unwrap();
+        let result = validate_pier(&pier).unwrap();
 
         assert_eq!(
             result.info.detected_ship_name.as_deref(),
@@ -243,71 +205,11 @@ mod tests {
     }
 
     #[test]
-    fn ship_name_mismatch_warns() {
-        let dir = test_dir("ship-mismatch");
-        let pier = dir.join("pier");
-        create_valid_pier(&pier);
-        write_install_marker(&pier, Some("different-ship"));
-
-        let manifest = make_manifest("~sampel-palnet");
-        let result = validate_pier(&pier, &manifest).unwrap();
-
-        assert_eq!(
-            result.info.detected_ship_name.as_deref(),
-            Some("different-ship")
-        );
-        assert_eq!(result.warnings.len(), 1);
-        assert!(result.warnings[0].contains("mismatch"));
-        assert!(result.warnings[0].contains("~sampel-palnet"));
-        assert!(result.warnings[0].contains("different-ship"));
-
-        let _ = fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn ship_name_normalization_strips_tilde() {
-        let dir = test_dir("ship-tilde");
-        let pier = dir.join("pier");
-        create_valid_pier(&pier);
-        // Marker has no tilde, manifest has tilde — should match
-        write_install_marker(&pier, Some("sampel-palnet"));
-
-        let manifest = make_manifest("~sampel-palnet");
-        let result = validate_pier(&pier, &manifest).unwrap();
-
-        assert!(
-            result.warnings.is_empty(),
-            "tilde difference should not produce a warning"
-        );
-
-        let _ = fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn ship_name_normalization_case_insensitive() {
-        let dir = test_dir("ship-case");
-        let pier = dir.join("pier");
-        create_valid_pier(&pier);
-        write_install_marker(&pier, Some("Sampel-Palnet"));
-
-        let manifest = make_manifest("~sampel-palnet");
-        let result = validate_pier(&pier, &manifest).unwrap();
-
-        assert!(
-            result.warnings.is_empty(),
-            "case difference should not produce a warning"
-        );
-
-        let _ = fs::remove_dir_all(&dir);
-    }
-
-    #[test]
     fn pier_dir_does_not_exist() {
         let dir = test_dir("no-pier");
         let pier = dir.join("pier");
 
-        let manifest = make_manifest("~sampel-palnet");
-        let err = validate_pier(&pier, &manifest).unwrap_err();
+        let err = validate_pier(&pier).unwrap_err();
         assert!(matches!(err, LauncherError::PierValidation { .. }));
         assert!(err.to_string().contains("does not exist"));
 
@@ -320,8 +222,7 @@ mod tests {
         let pier = dir.join("pier");
         fs::create_dir_all(&pier).unwrap();
 
-        let manifest = make_manifest("~sampel-palnet");
-        let err = validate_pier(&pier, &manifest).unwrap_err();
+        let err = validate_pier(&pier).unwrap_err();
         assert!(matches!(err, LauncherError::PierValidation { .. }));
         assert!(err.to_string().contains(".urb"));
 
@@ -334,8 +235,7 @@ mod tests {
         let pier = dir.join("pier");
         fs::create_dir_all(pier.join(".urb")).unwrap();
 
-        let manifest = make_manifest("~sampel-palnet");
-        let err = validate_pier(&pier, &manifest).unwrap_err();
+        let err = validate_pier(&pier).unwrap_err();
         assert!(matches!(err, LauncherError::PierValidation { .. }));
         assert!(err.to_string().contains("empty"));
 
@@ -348,8 +248,7 @@ mod tests {
         let pier = dir.join("pier");
         fs::create_dir_all(pier.join(".urb/something-new")).unwrap();
 
-        let manifest = make_manifest("~sampel-palnet");
-        let result = validate_pier(&pier, &manifest).unwrap();
+        let result = validate_pier(&pier).unwrap();
 
         assert!(result.warnings.is_empty());
 
@@ -358,7 +257,6 @@ mod tests {
 
     #[test]
     fn pier_with_real_urb_layout() {
-        // Mirrors the actual structure from a hosting export
         let dir = test_dir("real-layout");
         let pier = dir.join("pier");
         fs::create_dir_all(pier.join(".urb/put")).unwrap();
@@ -369,8 +267,7 @@ mod tests {
         fs::write(pier.join(".vere.txt"), "vere-v4.3\n").unwrap();
         write_install_marker(&pier, Some("soltel-novhex"));
 
-        let manifest = make_manifest("~soltel-novhex");
-        let result = validate_pier(&pier, &manifest).unwrap();
+        let result = validate_pier(&pier).unwrap();
 
         assert_eq!(result.info.vere_version.as_deref(), Some("vere-v4.3"));
         assert_eq!(
@@ -387,10 +284,8 @@ mod tests {
         let dir = test_dir("no-marker");
         let pier = dir.join("pier");
         create_valid_pier(&pier);
-        // No install marker written
 
-        let manifest = make_manifest("~sampel-palnet");
-        let result = validate_pier(&pier, &manifest).unwrap();
+        let result = validate_pier(&pier).unwrap();
 
         assert!(result.info.detected_ship_name.is_none());
         assert!(result.warnings.is_empty());
@@ -406,8 +301,7 @@ mod tests {
         fs::write(pier.join(".vere.txt"), "vere-v4.3\n").unwrap();
         write_install_marker(&pier, Some("sampel-palnet"));
 
-        let manifest = make_manifest("~sampel-palnet");
-        let result = validate_pier(&pier, &manifest).unwrap();
+        let result = validate_pier(&pier).unwrap();
 
         assert_eq!(result.info.vere_version.as_deref(), Some("vere-v4.3"));
         assert_eq!(

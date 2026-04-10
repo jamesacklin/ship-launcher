@@ -1,22 +1,18 @@
 use std::fs;
-use std::io::{self, Read};
+use std::io;
 use std::path::{Path, PathBuf};
 
-use sha2::{Digest, Sha256};
-
 use crate::errors::LauncherError;
-use crate::manifest::PierManifest;
 use crate::paths::AppPaths;
 
 const TEMP_DIR_PREFIX: &str = ".extract-tmp-";
 const INSTALL_MARKER_NAME: &str = ".install-marker.json";
 
-/// Recorded after a successful extraction so subsequent launches can skip it.
+/// Recorded after a successful extraction so subsequent launches can detect
+/// the ship name and know that extraction completed.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct InstallMarker {
     pub extracted_at: String,
-    pub archive_sha256: String,
-    pub format_version: u32,
     /// Ship name detected from the archive's top-level directory name.
     #[serde(default)]
     pub ship_name: Option<String>,
@@ -43,20 +39,6 @@ impl InstallMarker {
     }
 }
 
-/// Returns true if the pier already exists with a valid install marker matching
-/// the manifest, so extraction can be skipped.
-pub fn should_skip_extraction(pier_dir: &Path, manifest: &PierManifest) -> bool {
-    if !pier_dir.is_dir() {
-        return false;
-    }
-    let marker = match InstallMarker::read(pier_dir) {
-        Ok(m) => m,
-        Err(_) => return false,
-    };
-    marker.archive_sha256 == manifest.archive_sha256
-        && marker.format_version == manifest.format_version
-}
-
 /// Remove any leftover `.extract-tmp-*` directories inside `data_dir`.
 pub fn cleanup_partial_extractions(data_dir: &Path) -> Result<(), LauncherError> {
     let entries = match fs::read_dir(data_dir) {
@@ -73,28 +55,6 @@ pub fn cleanup_partial_extractions(data_dir: &Path) -> Result<(), LauncherError>
                 fs::remove_dir_all(entry.path())?;
             }
         }
-    }
-    Ok(())
-}
-
-/// Compute the SHA-256 hex digest of a file and compare against `expected`.
-pub fn verify_checksum(archive_path: &Path, expected: &str) -> Result<(), LauncherError> {
-    let mut file = fs::File::open(archive_path)?;
-    let mut hasher = Sha256::new();
-    let mut buf = [0u8; 8192];
-    loop {
-        let n = file.read(&mut buf)?;
-        if n == 0 {
-            break;
-        }
-        hasher.update(&buf[..n]);
-    }
-    let actual = format!("{:x}", hasher.finalize());
-    if actual != expected {
-        return Err(LauncherError::ChecksumMismatch {
-            expected: expected.to_string(),
-            actual,
-        });
     }
     Ok(())
 }
@@ -183,29 +143,18 @@ pub fn validate_extracted_pier(dest_dir: &Path) -> Result<PathBuf, LauncherError
 /// Run the full first-launch extraction pipeline.
 ///
 /// 1. Clean up any partial temp dirs from interrupted extractions
-/// 2. Check whether extraction can be skipped
-/// 3. Verify archive checksum against manifest
-/// 4. Extract archive to a temp directory
-/// 5. Validate the extracted pier structure
-/// 6. Atomically move the pier root to the final `pier/` path
-/// 7. Write an install marker
+/// 2. Extract archive to a temp directory
+/// 3. Validate the extracted pier structure
+/// 4. Atomically move the pier root to the final `pier/` path
+/// 5. Write an install marker
 pub fn run_extraction(
     paths: &AppPaths,
-    manifest: &PierManifest,
     archive_path: &Path,
 ) -> Result<(), LauncherError> {
     // 1. Clean up partial extractions from previous interrupted runs
     cleanup_partial_extractions(&paths.data_dir)?;
 
-    // 2. Skip if already extracted with matching marker
-    if should_skip_extraction(&paths.pier_dir, manifest) {
-        return Ok(());
-    }
-
-    // 3. Verify archive checksum
-    verify_checksum(archive_path, &manifest.archive_sha256)?;
-
-    // 4. Extract to a temp directory inside data_dir (same filesystem for atomic rename)
+    // 2. Extract to a temp directory inside data_dir (same filesystem for atomic rename)
     let temp_dir = paths.data_dir.join(format!(
         "{}{}",
         TEMP_DIR_PREFIX,
@@ -222,7 +171,7 @@ pub fn run_extraction(
         return Err(e);
     }
 
-    // 5. Validate the extracted pier
+    // 3. Validate the extracted pier
     let pier_root = match validate_extracted_pier(&temp_dir) {
         Ok(p) => p,
         Err(e) => {
@@ -231,7 +180,7 @@ pub fn run_extraction(
         }
     };
 
-    // 6. Atomic move — remove any existing pier_dir first
+    // 4. Atomic move — remove any existing pier_dir first
     if paths.pier_dir.exists() {
         fs::remove_dir_all(&paths.pier_dir)?;
     }
@@ -245,15 +194,13 @@ pub fn run_extraction(
     // Clean up the now-empty temp dir
     let _ = fs::remove_dir_all(&temp_dir);
 
-    // 7. Write install marker (include ship name from original directory name)
+    // 5. Write install marker (include ship name from original directory name)
     let ship_name = pier_root
         .file_name()
         .and_then(|n| n.to_str())
         .map(|s| s.to_string());
     let marker = InstallMarker {
         extracted_at: chrono::Utc::now().to_rfc3339(),
-        archive_sha256: manifest.archive_sha256.clone(),
-        format_version: manifest.format_version,
         ship_name,
     };
     marker.write(&paths.pier_dir)?;
@@ -265,7 +212,7 @@ pub fn run_extraction(
 mod tests {
     use super::*;
     /// Helper: create a minimal .tar.gz archive containing `<ship_name>/.urb/`
-    fn create_test_tar_gz(dest: &Path, ship_name: &str) -> String {
+    fn create_test_tar_gz(dest: &Path, ship_name: &str) {
         let buf = Vec::new();
         let encoder = flate2::write::GzEncoder::new(buf, flate2::Compression::default());
         let mut ar = tar::Builder::new(encoder);
@@ -285,18 +232,11 @@ mod tests {
             .unwrap();
 
         let compressed = ar.into_inner().unwrap().finish().unwrap();
-
-        let archive_path = dest.join("pier.tar.gz");
-        fs::write(&archive_path, &compressed).unwrap();
-
-        // Compute SHA-256
-        let mut hasher = Sha256::new();
-        hasher.update(&compressed);
-        format!("{:x}", hasher.finalize())
+        fs::write(dest.join("pier.tar.gz"), &compressed).unwrap();
     }
 
     /// Helper: create a minimal .tar.zst archive containing `<ship_name>/.urb/`
-    fn create_test_tar_zst(dest: &Path, ship_name: &str) -> String {
+    fn create_test_tar_zst(dest: &Path, ship_name: &str) {
         let buf = Vec::new();
         let mut ar = tar::Builder::new(buf);
 
@@ -315,13 +255,7 @@ mod tests {
 
         let tar_data = ar.into_inner().unwrap();
         let compressed = zstd::encode_all(tar_data.as_slice(), 3).unwrap();
-
-        let archive_path = dest.join("pier.tar.zst");
-        fs::write(&archive_path, &compressed).unwrap();
-
-        let mut hasher = Sha256::new();
-        hasher.update(&compressed);
-        format!("{:x}", hasher.finalize())
+        fs::write(dest.join("pier.tar.zst"), &compressed).unwrap();
     }
 
     fn test_dir(name: &str) -> PathBuf {
@@ -329,19 +263,6 @@ mod tests {
         let _ = fs::remove_dir_all(&p);
         fs::create_dir_all(&p).unwrap();
         p
-    }
-
-    fn make_manifest(sha: &str) -> PierManifest {
-        PierManifest {
-            format_version: 1,
-            ship: "~sampel-palnet".into(),
-            exported_at: "2026-04-09T15:30:00Z".into(),
-            archive_name: "pier.tar.zst".into(),
-            archive_sha256: sha.into(),
-            vere_version: "vere-v3.1".into(),
-            launcher_min_version: None,
-            notes: None,
-        }
     }
 
     fn make_paths(data_dir: &Path) -> AppPaths {
@@ -354,35 +275,9 @@ mod tests {
     }
 
     #[test]
-    fn verify_checksum_matches() {
-        let dir = test_dir("cksum-ok");
-        let content = b"hello world";
-        let path = dir.join("test.bin");
-        fs::write(&path, content).unwrap();
-
-        let mut hasher = Sha256::new();
-        hasher.update(content);
-        let expected = format!("{:x}", hasher.finalize());
-
-        verify_checksum(&path, &expected).unwrap();
-        let _ = fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn verify_checksum_mismatch() {
-        let dir = test_dir("cksum-bad");
-        let path = dir.join("test.bin");
-        fs::write(&path, b"hello").unwrap();
-
-        let err = verify_checksum(&path, "0000000000000000").unwrap_err();
-        assert!(matches!(err, LauncherError::ChecksumMismatch { .. }));
-        let _ = fs::remove_dir_all(&dir);
-    }
-
-    #[test]
     fn extract_tar_gz() {
         let dir = test_dir("extract-gz");
-        let _sha = create_test_tar_gz(&dir, "sampel-palnet");
+        create_test_tar_gz(&dir, "sampel-palnet");
         let archive = dir.join("pier.tar.gz");
         let dest = dir.join("out");
         fs::create_dir_all(&dest).unwrap();
@@ -396,7 +291,7 @@ mod tests {
     #[test]
     fn extract_tar_zst() {
         let dir = test_dir("extract-zst");
-        let _sha = create_test_tar_zst(&dir, "sampel-palnet");
+        create_test_tar_zst(&dir, "sampel-palnet");
         let archive = dir.join("pier.tar.zst");
         let dest = dir.join("out");
         fs::create_dir_all(&dest).unwrap();
@@ -449,52 +344,6 @@ mod tests {
     }
 
     #[test]
-    fn skip_extraction_when_marker_matches() {
-        let dir = test_dir("skip-ok");
-        let pier_dir = dir.join("pier");
-        fs::create_dir_all(&pier_dir).unwrap();
-
-        let marker = InstallMarker {
-            extracted_at: "2026-04-09T00:00:00Z".into(),
-            archive_sha256: "abc123".into(),
-            format_version: 1,
-            ship_name: Some("sampel-palnet".into()),
-        };
-        marker.write(&pier_dir).unwrap();
-
-        let manifest = make_manifest("abc123");
-        assert!(should_skip_extraction(&pier_dir, &manifest));
-        let _ = fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn no_skip_when_checksum_differs() {
-        let dir = test_dir("skip-diff");
-        let pier_dir = dir.join("pier");
-        fs::create_dir_all(&pier_dir).unwrap();
-
-        let marker = InstallMarker {
-            extracted_at: "2026-04-09T00:00:00Z".into(),
-            archive_sha256: "old_hash".into(),
-            format_version: 1,
-            ship_name: Some("sampel-palnet".into()),
-        };
-        marker.write(&pier_dir).unwrap();
-
-        let manifest = make_manifest("new_hash");
-        assert!(!should_skip_extraction(&pier_dir, &manifest));
-        let _ = fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn no_skip_when_no_pier() {
-        let dir = test_dir("skip-nopier");
-        let manifest = make_manifest("abc123");
-        assert!(!should_skip_extraction(&dir.join("pier"), &manifest));
-        let _ = fs::remove_dir_all(&dir);
-    }
-
-    #[test]
     fn cleanup_removes_temp_dirs() {
         let dir = test_dir("cleanup");
         fs::create_dir_all(dir.join(".extract-tmp-12345")).unwrap();
@@ -515,19 +364,17 @@ mod tests {
         let paths = make_paths(&dir);
         paths.ensure_dirs().unwrap();
 
-        let sha = create_test_tar_gz(&dir, "sampel-palnet");
+        create_test_tar_gz(&dir, "sampel-palnet");
         let archive = dir.join("pier.tar.gz");
-        let manifest = make_manifest(&sha);
 
-        run_extraction(&paths, &manifest, &archive).unwrap();
+        run_extraction(&paths, &archive).unwrap();
 
         assert!(paths.pier_dir.join(".urb").is_dir());
         assert!(paths.pier_dir.join(INSTALL_MARKER_NAME).is_file());
 
         // Read back the marker and verify
         let marker = InstallMarker::read(&paths.pier_dir).unwrap();
-        assert_eq!(marker.archive_sha256, sha);
-        assert_eq!(marker.format_version, 1);
+        assert_eq!(marker.ship_name.as_deref(), Some("sampel-palnet"));
 
         let _ = fs::remove_dir_all(&dir);
     }
@@ -538,55 +385,13 @@ mod tests {
         let paths = make_paths(&dir);
         paths.ensure_dirs().unwrap();
 
-        let sha = create_test_tar_zst(&dir, "sampel-palnet");
+        create_test_tar_zst(&dir, "sampel-palnet");
         let archive = dir.join("pier.tar.zst");
-        let manifest = make_manifest(&sha);
 
-        run_extraction(&paths, &manifest, &archive).unwrap();
+        run_extraction(&paths, &archive).unwrap();
 
         assert!(paths.pier_dir.join(".urb").is_dir());
         assert!(paths.pier_dir.join(INSTALL_MARKER_NAME).is_file());
-
-        let _ = fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn full_extraction_skips_when_marker_valid() {
-        let dir = test_dir("full-skip");
-        let paths = make_paths(&dir);
-        paths.ensure_dirs().unwrap();
-
-        let sha = create_test_tar_zst(&dir, "sampel-palnet");
-        let archive = dir.join("pier.tar.zst");
-        let manifest = make_manifest(&sha);
-
-        // First extraction
-        run_extraction(&paths, &manifest, &archive).unwrap();
-
-        // Remove the archive to prove second call doesn't try to read it
-        fs::remove_file(&archive).unwrap();
-
-        // Second call should skip without error
-        run_extraction(&paths, &manifest, &archive).unwrap();
-
-        let _ = fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn full_extraction_bad_checksum() {
-        let dir = test_dir("full-badsum");
-        let paths = make_paths(&dir);
-        paths.ensure_dirs().unwrap();
-
-        let _sha = create_test_tar_gz(&dir, "sampel-palnet");
-        let archive = dir.join("pier.tar.gz");
-        let manifest = make_manifest("wrong_hash");
-
-        let err = run_extraction(&paths, &manifest, &archive).unwrap_err();
-        assert!(matches!(err, LauncherError::ChecksumMismatch { .. }));
-
-        // pier_dir should not exist
-        assert!(!paths.pier_dir.join(".urb").exists());
 
         let _ = fs::remove_dir_all(&dir);
     }
@@ -600,11 +405,10 @@ mod tests {
         // Plant a stale temp dir
         fs::create_dir_all(dir.join(".extract-tmp-stale")).unwrap();
 
-        let sha = create_test_tar_gz(&dir, "sampel-palnet");
+        create_test_tar_gz(&dir, "sampel-palnet");
         let archive = dir.join("pier.tar.gz");
-        let manifest = make_manifest(&sha);
 
-        run_extraction(&paths, &manifest, &archive).unwrap();
+        run_extraction(&paths, &archive).unwrap();
 
         // Stale temp dir should be gone
         assert!(!dir.join(".extract-tmp-stale").exists());

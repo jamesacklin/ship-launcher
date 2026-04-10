@@ -6,7 +6,7 @@
 # will have schema files for capabilities auto-completion
 /gen/schemas
 
-# Pier archives and manifests placed in resources/ by CI
+# Pier archives placed in resources/ by CI
 resources/*.tar.gz
 resources/*.tar.zst
-resources/pier-manifest.json
+resources/*.zip
