@@ -21,6 +21,8 @@ use runtime::RuntimeManager;
 use serde::Serialize;
 use state::{LauncherState, StateMachine};
 use tauri::Manager;
+use tauri::tray::TrayIconBuilder;
+use tauri::menu::{MenuBuilder, MenuItemBuilder};
 
 /// Diagnostics snapshot returned by `get_diagnostics`.
 #[derive(Debug, Clone, Serialize)]
@@ -696,10 +698,46 @@ pub fn run() {
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             // A second instance was launched — focus the existing window.
             if let Some(window) = app.webview_windows().values().next() {
+                let _ = window.show();
                 let _ = window.unminimize();
                 let _ = window.set_focus();
             }
         }))
+        .setup(|app| {
+            let show_item = MenuItemBuilder::with_id("show", "Show Interface").build(app)?;
+            let quit_item = MenuItemBuilder::with_id("quit", "Quit").build(app)?;
+            let menu = MenuBuilder::new(app)
+                .item(&show_item)
+                .item(&quit_item)
+                .build()?;
+
+            let _tray = TrayIconBuilder::new()
+                .icon(app.default_window_icon().cloned().unwrap())
+                .menu(&menu)
+                .on_menu_event(|app, event| match event.id().as_ref() {
+                    "show" => {
+                        if let Some(window) = app.webview_windows().values().next() {
+                            let _ = window.show();
+                            let _ = window.unminimize();
+                            let _ = window.set_focus();
+                        }
+                    }
+                    "quit" => {
+                        app.exit(0);
+                    }
+                    _ => {}
+                })
+                .build(app)?;
+
+            Ok(())
+        })
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                // Hide the window instead of closing it.
+                api.prevent_close();
+                let _ = window.hide();
+            }
+        })
         .manage(state_machine)
         .manage(runtime)
         .manage(app_paths)
@@ -729,7 +767,7 @@ pub fn run() {
                     // Prevent the app from exiting until vere is fully stopped.
                     api.prevent_exit();
 
-                    log_for_exit.add_launcher_line("Window closed — stopping vere");
+                    log_for_exit.add_launcher_line("Quitting — stopping vere");
                     let _ = sm_for_exit.transition(LauncherState::Stopping);
 
                     #[cfg(unix)]
