@@ -330,12 +330,10 @@ function ErrorScreen({
   status,
   logs,
   onRetry,
-  onReset,
 }: {
   status: StatusResponse;
   logs: string[];
   onRetry: () => void;
-  onReset: () => void;
 }) {
   const ctx = status.context as { message?: string; detail?: string } | undefined;
   const [showDetail, setShowDetail] = useState(false);
@@ -363,10 +361,7 @@ function ErrorScreen({
         </div>
         <div className="actions">
           <button className="primary" onClick={onRetry}>
-            Retry
-          </button>
-          <button className="danger" onClick={onReset}>
-            Reset Ship
+            Retry Boot
           </button>
         </div>
       </div>
@@ -379,12 +374,10 @@ function CrashedScreen({
   status,
   logs,
   onRestart,
-  onReset,
 }: {
   status: StatusResponse;
   logs: string[];
   onRestart: () => void;
-  onReset: () => void;
 }) {
   const ctx = status.context as {
     exit_code?: number | null;
@@ -408,9 +401,6 @@ function CrashedScreen({
         <div className="actions">
           <button className="primary" onClick={onRestart}>
             Restart
-          </button>
-          <button className="danger" onClick={onReset}>
-            Reset Ship
           </button>
         </div>
       </div>
@@ -505,20 +495,10 @@ function App() {
     }
   }, []);
 
-  const handleRetry = useCallback(async () => {
-    prepareCalledRef.current = false;
-    // Force back to Uninitialized to re-trigger prepare.
-    try {
-      await invoke("reset_ship");
-    } catch {
-      // Error reflected in state.
-    }
-  }, []);
-
-  const handleReset = useCallback(async () => {
+  const handleRetryBoot = useCallback(async () => {
     prepareCalledRef.current = false;
     try {
-      await invoke("reset_ship");
+      await invoke("retry_boot");
     } catch {
       // Error reflected in state.
     }
@@ -602,8 +582,7 @@ function App() {
           <ErrorScreen
             status={status}
             logs={logs}
-            onRetry={handleRetry}
-            onReset={handleReset}
+            onRetry={handleRetryBoot}
           />
         )}
         {stateName === "Crashed" && (
@@ -611,7 +590,6 @@ function App() {
             status={status}
             logs={logs}
             onRestart={handleRestart}
-            onReset={handleReset}
           />
         )}
       </div>

@@ -76,7 +76,7 @@ impl LauncherState {
     fn allowed_transitions(&self) -> &'static [&'static str] {
         match self {
             Self::Uninitialized => &["Extracting", "Prepared", "Error"],
-            Self::Extracting { .. } => &["Prepared", "Error"],
+            Self::Extracting { .. } => &["Extracting", "Prepared", "Error"],
             Self::Prepared => &["Starting", "Error", "Uninitialized"],
             Self::Starting => &["Running", "Crashed", "Error"],
             Self::Running { .. } => &["Stopping", "Stopped", "Crashed", "Error"],

@@ -93,16 +93,26 @@ impl RuntimeManager {
         self.state_machine.transition(LauncherState::Starting)?;
         self.log_manager.add_launcher_line("Transitioning to Starting");
 
+        // Prefer the docked binary at <pier>/.run if it exists.
+        let docked = self.pier_path.join(".run");
+        let vere_bin = if docked.is_file() {
+            self.log_manager
+                .add_launcher_line("Using docked .run binary from pier");
+            docked
+        } else {
+            self.vere_path.clone()
+        };
+
         // Ensure the binary is executable.
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            if let Ok(metadata) = std::fs::metadata(&self.vere_path) {
+            if let Ok(metadata) = std::fs::metadata(&vere_bin) {
                 let mut perms = metadata.permissions();
                 let mode = perms.mode();
                 if mode & 0o111 == 0 {
                     perms.set_mode(mode | 0o111);
-                    let _ = std::fs::set_permissions(&self.vere_path, perms);
+                    let _ = std::fs::set_permissions(&vere_bin, perms);
                 }
             }
         }
@@ -114,13 +124,13 @@ impl RuntimeManager {
 
         // Spawn vere.
         // -t disables terminal/tty assumptions (required when running as a child process).
-        let mut cmd = Command::new(&self.vere_path);
+        let mut cmd = Command::new(&vere_bin);
         cmd.arg("-t");
 
         if let (true, Some(ref name)) = (needs_fake_boot, &self.fake_ship) {
             self.log_manager.add_launcher_line(&format!(
                 "Spawning vere (fake mode): {} -t -F {} --http-port {}",
-                self.vere_path.display(),
+                vere_bin.display(),
                 name,
                 self.http_port,
             ));
@@ -134,7 +144,7 @@ impl RuntimeManager {
         } else {
             self.log_manager.add_launcher_line(&format!(
                 "Spawning vere: {} -t --http-port {} {}",
-                self.vere_path.display(),
+                vere_bin.display(),
                 self.http_port,
                 self.pier_path.display()
             ));
@@ -152,7 +162,7 @@ impl RuntimeManager {
                     .add_launcher_line(&format!("Failed to spawn vere: {e}"));
                 self.state_machine.force_error(
                     format!("Failed to spawn vere: {e}"),
-                    Some(format!("path: {}", self.vere_path.display())),
+                    Some(format!("path: {}", vere_bin.display())),
                 );
                 LauncherError::Runtime {
                     reason: format!("failed to spawn vere: {e}"),

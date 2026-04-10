@@ -1,5 +1,6 @@
 pub mod bundle;
 pub mod click;
+pub mod download;
 pub mod errors;
 pub mod extract;
 pub mod health;
@@ -81,6 +82,18 @@ async fn prepare_ship(
     // Ensure directories exist.
     paths.ensure_dirs()?;
 
+    // Ensure vere binary exists (download if needed).
+    // SHIP_LAUNCHER_VERE_PATH env var overrides — skip download.
+    if std::env::var("SHIP_LAUNCHER_VERE_PATH").is_err() {
+        let vere_path = paths.data_dir.join("bin").join("vere");
+        let pier_for_version = if rt.fake_ship().is_some() {
+            paths.data_dir.join(rt.fake_ship().unwrap())
+        } else {
+            paths.pier_dir.clone()
+        };
+        download::ensure_vere(&vere_path, &pier_for_version, &sm, &log_manager).await?;
+    }
+
     let is_fake_mode = rt.fake_ship().is_some();
 
     // In fake mode, skip extraction entirely — vere -F will create the pier.
@@ -91,6 +104,15 @@ async fn prepare_ship(
         let current = sm.current();
         if matches!(current, LauncherState::Uninitialized) {
             sm.transition(LauncherState::Prepared)?;
+        }
+
+        // Dock vere into the pier if it already exists from a previous boot.
+        let fake_pier = paths.data_dir.join(name);
+        if fake_pier.join(".urb").is_dir() {
+            let vere_for_dock = std::env::var("SHIP_LAUNCHER_VERE_PATH")
+                .map(PathBuf::from)
+                .unwrap_or_else(|_| paths.data_dir.join("bin").join("vere"));
+            download::dock_vere(&vere_for_dock, &fake_pier, &log_manager).await?;
         }
 
         log_manager.add_launcher_line("Auto-starting runtime (fake mode)...");
@@ -225,6 +247,20 @@ async fn prepare_ship(
                 }
             }
         }
+    }
+
+    // Dock vere into the pier if not already docked.
+    // This makes the pier self-contained with a .run binary.
+    let pier_for_dock = if rt.fake_ship().is_some() {
+        paths.data_dir.join(rt.fake_ship().unwrap())
+    } else {
+        paths.pier_dir.clone()
+    };
+    if pier_for_dock.join(".urb").is_dir() {
+        let vere_for_dock = std::env::var("SHIP_LAUNCHER_VERE_PATH")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| paths.data_dir.join("bin").join("vere"));
+        download::dock_vere(&vere_for_dock, &pier_for_dock, &log_manager).await?;
     }
 
     log_manager.add_launcher_line("Ship preparation complete");
@@ -370,38 +406,27 @@ async fn get_login_code(
 }
 
 #[tauri::command]
-async fn reset_ship(
+async fn retry_boot(
     state_machine: tauri::State<'_, StateMachine>,
     runtime: tauri::State<'_, RuntimeManager>,
-    app_paths: tauri::State<'_, AppPaths>,
 ) -> Result<(), errors::LauncherError> {
     let log_manager = runtime.log_manager().clone();
 
     // Stop vere if running.
     if runtime.pid().is_some() {
-        log_manager.add_launcher_line("Stopping runtime before reset...");
+        log_manager.add_launcher_line("Stopping runtime before retry...");
         runtime.stop().await?;
         // Wait for state to settle.
         tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
     }
 
-    log_manager.add_launcher_line("Resetting ship: removing extracted pier");
+    log_manager.add_launcher_line("Retrying boot sequence");
 
-    // Remove extracted pier.
-    if app_paths.pier_dir.exists() {
-        std::fs::remove_dir_all(&app_paths.pier_dir).map_err(|e| {
-            errors::LauncherError::Runtime {
-                reason: format!("failed to remove pier directory: {e}"),
-            }
-        })?;
-    }
-
-    // Force back to Uninitialized.
-    state_machine.force_error("Reset initiated".into(), None);
-    // Now transition from Error to Uninitialized (allowed).
+    // Force back to Uninitialized to re-trigger prepare/start.
+    state_machine.force_error("Retry initiated".into(), None);
     state_machine.transition(LauncherState::Uninitialized)?;
 
-    log_manager.add_launcher_line("Reset complete — returned to Uninitialized");
+    log_manager.add_launcher_line("Retry — returned to Uninitialized");
     Ok(())
 }
 
@@ -496,7 +521,7 @@ pub fn run() {
             reveal_data_dir,
             get_diagnostics,
             get_login_code,
-            reset_ship,
+            retry_boot,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
