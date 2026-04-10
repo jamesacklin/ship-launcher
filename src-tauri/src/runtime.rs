@@ -28,6 +28,8 @@ pub struct RuntimeManager {
     vere_path: PathBuf,
     pier_path: PathBuf,
     http_port: u16,
+    /// If set, boot a fake ship with `-F <name>` on first run.
+    fake_ship: Option<String>,
     inner: Arc<Mutex<ProcessState>>,
     log_manager: LogManager,
     health: HealthChecker,
@@ -47,6 +49,7 @@ impl RuntimeManager {
             vere_path,
             pier_path,
             http_port,
+            fake_ship: None,
             inner: Arc::new(Mutex::new(ProcessState { pid: None })),
             log_manager,
             health,
@@ -57,6 +60,18 @@ impl RuntimeManager {
         self.http_port = port;
         self.health = HealthChecker::new(port, self.log_manager.clone());
         self
+    }
+
+    /// Enable fake ship mode. On first boot (pier doesn't exist yet), vere
+    /// will be invoked with `-F <name>` to create a fake ship.
+    pub fn with_fake_ship(mut self, name: String) -> Self {
+        self.fake_ship = Some(name);
+        self
+    }
+
+    /// Returns the fake ship name, if fake mode is enabled.
+    pub fn fake_ship(&self) -> Option<&str> {
+        self.fake_ship.as_deref()
     }
 
     /// Start the vere runtime process.
@@ -92,20 +107,43 @@ impl RuntimeManager {
             }
         }
 
+        // Determine whether this is a fake first-boot.
+        // `-F <name>` creates a new fake ship; the pier directory is created
+        // by vere in the working directory we set (pier_path's parent).
+        let needs_fake_boot = self.fake_ship.is_some() && !self.pier_path.join(".urb").exists();
+
         // Spawn vere.
         // -t disables terminal/tty assumptions (required when running as a child process).
-        self.log_manager.add_launcher_line(&format!(
-            "Spawning vere: {} -t --http-port {} {}",
-            self.vere_path.display(),
-            self.http_port,
-            self.pier_path.display()
-        ));
+        let mut cmd = Command::new(&self.vere_path);
+        cmd.arg("-t");
 
-        let mut child = Command::new(&self.vere_path)
-            .arg("-t")
-            .arg("--http-port")
-            .arg(self.http_port.to_string())
-            .arg(&self.pier_path)
+        if let (true, Some(ref name)) = (needs_fake_boot, &self.fake_ship) {
+            self.log_manager.add_launcher_line(&format!(
+                "Spawning vere (fake mode): {} -t -F {} --http-port {}",
+                self.vere_path.display(),
+                name,
+                self.http_port,
+            ));
+            cmd.arg("-F").arg(name);
+            // vere -F creates `<name>/` in the current directory, so set cwd
+            // to the pier_path's parent so the pier lands at pier_path.
+            if let Some(parent) = self.pier_path.parent() {
+                std::fs::create_dir_all(parent).ok();
+                cmd.current_dir(parent);
+            }
+        } else {
+            self.log_manager.add_launcher_line(&format!(
+                "Spawning vere: {} -t --http-port {} {}",
+                self.vere_path.display(),
+                self.http_port,
+                self.pier_path.display()
+            ));
+            cmd.arg(&self.pier_path);
+        }
+
+        cmd.arg("--http-port").arg(self.http_port.to_string());
+
+        let mut child = cmd
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
             .spawn()
@@ -276,6 +314,11 @@ impl RuntimeManager {
     /// Returns `true` if the ship's HTTP port is responding.
     pub fn is_ship_ready(&self) -> bool {
         self.health.is_ready()
+    }
+
+    /// Returns the configured HTTP port.
+    pub fn http_port(&self) -> u16 {
+        self.http_port
     }
 
     /// Returns a reference to the log manager for external use.

@@ -12,9 +12,12 @@
   "app": {
     "windows": [
       {
-        "title": "ship-launcher",
-        "width": 800,
-        "height": 600
+        "title": "Ship Launcher",
+        "width": 620,
+        "height": 640,
+        "resizable": true,
+        "minWidth": 600,
+        "minHeight": 480
       }
     ],
     "security": {
