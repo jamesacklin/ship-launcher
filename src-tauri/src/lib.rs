@@ -1,5 +1,6 @@
 pub mod bundle;
 pub mod click;
+pub mod download;
 pub mod errors;
 pub mod extract;
 pub mod health;
@@ -80,6 +81,18 @@ async fn prepare_ship(
 
     // Ensure directories exist.
     paths.ensure_dirs()?;
+
+    // Ensure vere binary exists (download if needed).
+    // SHIP_LAUNCHER_VERE_PATH env var overrides — skip download.
+    if std::env::var("SHIP_LAUNCHER_VERE_PATH").is_err() {
+        let vere_path = paths.data_dir.join("bin").join("vere");
+        let pier_for_version = if rt.fake_ship().is_some() {
+            paths.data_dir.join(rt.fake_ship().unwrap())
+        } else {
+            paths.pier_dir.clone()
+        };
+        download::ensure_vere(&vere_path, &pier_for_version, &sm, &log_manager).await?;
+    }
 
     let is_fake_mode = rt.fake_ship().is_some();
 

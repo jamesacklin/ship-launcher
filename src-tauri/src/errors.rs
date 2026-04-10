@@ -29,6 +29,9 @@ pub enum LauncherError {
     #[error("version incompatibility: {reason}")]
     VersionIncompatible { reason: String },
 
+    #[error("download error: {reason}")]
+    Download { reason: String },
+
     #[error("runtime error: {reason}")]
     Runtime { reason: String },
 
