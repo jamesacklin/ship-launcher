@@ -405,6 +405,82 @@ async fn get_login_code(
     click::get_code(&pier_path).await
 }
 
+/// Check if a newer vere version is available on GitHub.
+///
+/// Returns `Some("4.4")` if an update is available, `None` if current.
+#[tauri::command]
+async fn check_for_update(
+    runtime: tauri::State<'_, RuntimeManager>,
+    app_paths: tauri::State<'_, AppPaths>,
+) -> Result<Option<String>, errors::LauncherError> {
+    let pier_path = if let Some(name) = runtime.fake_ship() {
+        app_paths.data_dir.join(name)
+    } else {
+        app_paths.pier_dir.clone()
+    };
+
+    let current = download::version_from_pier(&pier_path);
+
+    let client = reqwest::Client::new();
+    let latest = download::fetch_latest_version(&client).await?;
+
+    match current {
+        Some(cur) if cur == latest => Ok(None),
+        _ => Ok(Some(latest)),
+    }
+}
+
+/// Upgrade the docked vere binary by running `<pier>/.run next`, then restart.
+#[tauri::command]
+async fn upgrade_vere(
+    runtime: tauri::State<'_, RuntimeManager>,
+    app_paths: tauri::State<'_, AppPaths>,
+) -> Result<(), errors::LauncherError> {
+    let log_manager = runtime.log_manager().clone();
+    let pier_path = if let Some(name) = runtime.fake_ship() {
+        app_paths.data_dir.join(name)
+    } else {
+        app_paths.pier_dir.clone()
+    };
+
+    let run_path = pier_path.join(".run");
+    if !run_path.exists() {
+        return Err(errors::LauncherError::Runtime {
+            reason: "no .run binary found in pier".into(),
+        });
+    }
+
+    // Stop vere if running.
+    if runtime.pid().is_some() {
+        log_manager.add_launcher_line("Stopping runtime before upgrade...");
+        runtime.stop().await?;
+        tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+    }
+
+    log_manager.add_launcher_line("Upgrading docked vere binary...");
+
+    let output = tokio::process::Command::new(&run_path)
+        .arg("next")
+        .arg(&pier_path)
+        .output()
+        .await
+        .map_err(|e| errors::LauncherError::Runtime {
+            reason: format!("failed to run .run next: {e}"),
+        })?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(errors::LauncherError::Runtime {
+            reason: format!("vere upgrade failed (exit {}): {}", output.status, stderr.trim()),
+        });
+    }
+
+    log_manager.add_launcher_line("Upgrade complete, restarting ship...");
+    runtime.start().await?;
+
+    Ok(())
+}
+
 #[tauri::command]
 async fn retry_boot(
     state_machine: tauri::State<'_, StateMachine>,
@@ -521,6 +597,8 @@ pub fn run() {
             reveal_data_dir,
             get_diagnostics,
             get_login_code,
+            check_for_update,
+            upgrade_vere,
             retry_boot,
         ])
         .build(tauri::generate_context!())
