@@ -3,6 +3,7 @@ pub mod click;
 pub mod errors;
 pub mod extract;
 pub mod health;
+pub mod lock;
 pub mod logs;
 pub mod manifest;
 pub mod paths;
@@ -18,6 +19,7 @@ use paths::AppPaths;
 use runtime::RuntimeManager;
 use serde::Serialize;
 use state::{LauncherState, StateMachine};
+use tauri::Manager;
 
 /// Diagnostics snapshot returned by `get_diagnostics`.
 #[derive(Debug, Clone, Serialize)]
@@ -417,6 +419,21 @@ pub fn run() {
 
     let app_paths = AppPaths::resolve().expect("failed to resolve app paths");
 
+    // Ensure run directory exists before acquiring lock.
+    let _ = std::fs::create_dir_all(&app_paths.run_dir);
+
+    // Acquire file-based instance lock. Stale locks from prior crashes are
+    // detected and cleaned up automatically.
+    let _instance_lock = match lock::InstanceLock::acquire(&app_paths.run_dir) {
+        Ok(lock) => lock,
+        Err(e) => {
+            eprintln!("{e}");
+            // The single-instance plugin below will focus the existing window.
+            // If we get here without the plugin catching it, just exit.
+            std::process::exit(1);
+        }
+    };
+
     // Initialize log manager with disk persistence.
     let log_manager = LogManager::new();
     if let Err(e) = log_manager.init_disk_logs(&app_paths.logs_dir) {
@@ -456,6 +473,13 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_clipboard_manager::init())
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            // A second instance was launched — focus the existing window.
+            if let Some(window) = app.webview_windows().values().next() {
+                let _ = window.unminimize();
+                let _ = window.set_focus();
+            }
+        }))
         .manage(state_machine)
         .manage(runtime)
         .manage(app_paths)
