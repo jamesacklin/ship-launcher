@@ -494,7 +494,7 @@ function App() {
         } catch {
           // Ignore — network may be unavailable.
         }
-        await new Promise((r) => setTimeout(r, 60_000));
+        await new Promise((r) => setTimeout(r, 3 * 60 * 60_000));
       }
     };
     check();
