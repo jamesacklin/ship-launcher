@@ -16,8 +16,7 @@ interface StatusResponse {
 interface DiagnosticsData {
   app_support_path: string;
   pier_path: string;
-  bundled_vere_version: string | null;
-  pier_vere_version: string | null;
+  vere_version: string | null;
   current_state: { state: string; context?: Record<string, unknown> };
   pid: number | null;
   last_exit_code: number | null;
@@ -160,12 +159,8 @@ function DiagnosticsModal({
             <DiagRow label="App support" value={data.app_support_path} />
             <DiagRow label="Pier path" value={data.pier_path} />
             <DiagRow
-              label="Vere (bundled)"
-              value={data.bundled_vere_version ?? "unknown"}
-            />
-            <DiagRow
-              label="Vere (pier)"
-              value={data.pier_vere_version ?? "unknown"}
+              label="Vere"
+              value={data.vere_version ? `v${data.vere_version}` : "unknown"}
             />
             <DiagRow
               label="Last exit code"

@@ -27,8 +27,7 @@ use tauri::Manager;
 pub struct Diagnostics {
     pub app_support_path: String,
     pub pier_path: String,
-    pub bundled_vere_version: Option<String>,
-    pub pier_vere_version: Option<String>,
+    pub vere_version: Option<String>,
     pub current_state: LauncherState,
     pub pid: Option<u32>,
     pub last_exit_code: Option<i32>,
@@ -343,26 +342,17 @@ fn get_diagnostics(
         _ => (None, None),
     };
 
-    // Read pier's .vere.txt
-    let pier_vere_version = std::fs::read_to_string(app_paths.pier_dir.join(".vere.txt"))
-        .ok()
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty());
-
-    // Get bundled vere version (best-effort).
-    let vere_path = std::env::var("SHIP_LAUNCHER_VERE_PATH")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| app_paths.data_dir.join("bin").join("vere"));
-    let bundled_vere_version = if vere_path.exists() {
-        version::parse_version(
-            &std::process::Command::new(&vere_path)
-                .arg("--version")
-                .output()
-                .ok()
-                .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
-                .unwrap_or_default(),
-        )
-        .map(|v| v.raw)
+    // Get the running vere version from the docked .run binary.
+    let pier_path = if let Some(name) = runtime.fake_ship() {
+        app_paths.data_dir.join(name)
+    } else {
+        app_paths.pier_dir.clone()
+    };
+    let run_path = pier_path.join(".run");
+    let vere_version = if run_path.exists() {
+        version::get_bundled_version(&run_path)
+            .ok()
+            .map(|v| format!("{}.{}", v.major, v.minor))
     } else {
         None
     };
@@ -373,8 +363,7 @@ fn get_diagnostics(
     Diagnostics {
         app_support_path: app_paths.data_dir.display().to_string(),
         pier_path: app_paths.pier_dir.display().to_string(),
-        bundled_vere_version,
-        pier_vere_version,
+        vere_version,
         current_state,
         pid: runtime.pid(),
         last_exit_code,
@@ -735,8 +724,11 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(move |_app, event| {
-            if let tauri::RunEvent::ExitRequested { .. } = &event {
+            if let tauri::RunEvent::ExitRequested { api, .. } = event {
                 if let Some(pid) = runtime_for_exit.pid() {
+                    // Prevent the app from exiting until vere is fully stopped.
+                    api.prevent_exit();
+
                     log_for_exit.add_launcher_line("Window closed — stopping vere");
                     let _ = sm_for_exit.transition(LauncherState::Stopping);
 
@@ -749,8 +741,6 @@ pub fn run() {
                         }
                         log_for_exit.add_launcher_line("Sent SIGTERM, waiting for vere to exit");
 
-                        // Block until vere actually exits (releases .vere.lock),
-                        // with a timeout so we don't hang forever.
                         use std::time::{Duration, Instant};
                         let deadline = Instant::now() + Duration::from_secs(10);
                         loop {
@@ -758,31 +748,29 @@ pub fn run() {
                             let ret = unsafe {
                                 libc::waitpid(pid as libc::pid_t, std::ptr::null_mut(), libc::WNOHANG)
                             };
-                            // ret > 0: reaped. ret == -1: not our child or already reaped.
-                            // Either way, check if still alive.
                             if ret != 0 {
                                 break;
                             }
-                            // Also check with kill(0) — covers processes we can't waitpid.
                             let alive = unsafe { libc::kill(pid as libc::pid_t, 0) } == 0;
                             if !alive {
                                 break;
                             }
                             if Instant::now() >= deadline {
-                                // Force kill after timeout.
                                 log_for_exit.add_launcher_line("Timeout waiting for vere, sending SIGKILL");
                                 unsafe {
                                     libc::kill(-(pid as libc::pid_t), libc::SIGKILL);
                                     libc::kill(pid as libc::pid_t, libc::SIGKILL);
                                 }
-                                // Brief wait for SIGKILL to take effect.
                                 std::thread::sleep(Duration::from_millis(500));
                                 break;
                             }
                             std::thread::sleep(Duration::from_millis(100));
                         }
-                        log_for_exit.add_launcher_line("vere process exited");
+                        log_for_exit.add_launcher_line("vere process exited, quitting app");
                     }
+
+                    // Now actually exit.
+                    std::process::exit(0);
                 }
             }
         });
