@@ -370,38 +370,27 @@ async fn get_login_code(
 }
 
 #[tauri::command]
-async fn reset_ship(
+async fn retry_boot(
     state_machine: tauri::State<'_, StateMachine>,
     runtime: tauri::State<'_, RuntimeManager>,
-    app_paths: tauri::State<'_, AppPaths>,
 ) -> Result<(), errors::LauncherError> {
     let log_manager = runtime.log_manager().clone();
 
     // Stop vere if running.
     if runtime.pid().is_some() {
-        log_manager.add_launcher_line("Stopping runtime before reset...");
+        log_manager.add_launcher_line("Stopping runtime before retry...");
         runtime.stop().await?;
         // Wait for state to settle.
         tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
     }
 
-    log_manager.add_launcher_line("Resetting ship: removing extracted pier");
+    log_manager.add_launcher_line("Retrying boot sequence");
 
-    // Remove extracted pier.
-    if app_paths.pier_dir.exists() {
-        std::fs::remove_dir_all(&app_paths.pier_dir).map_err(|e| {
-            errors::LauncherError::Runtime {
-                reason: format!("failed to remove pier directory: {e}"),
-            }
-        })?;
-    }
-
-    // Force back to Uninitialized.
-    state_machine.force_error("Reset initiated".into(), None);
-    // Now transition from Error to Uninitialized (allowed).
+    // Force back to Uninitialized to re-trigger prepare/start.
+    state_machine.force_error("Retry initiated".into(), None);
     state_machine.transition(LauncherState::Uninitialized)?;
 
-    log_manager.add_launcher_line("Reset complete — returned to Uninitialized");
+    log_manager.add_launcher_line("Retry — returned to Uninitialized");
     Ok(())
 }
 
@@ -496,7 +485,7 @@ pub fn run() {
             reveal_data_dir,
             get_diagnostics,
             get_login_code,
-            reset_ship,
+            retry_boot,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
